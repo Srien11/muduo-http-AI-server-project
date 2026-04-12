@@ -16,6 +16,8 @@ public:
     void Get(const std::string& path, RouteHandler handler);
     void Post(const std::string& path, RouteHandler handler);
 
+    bool Route(const HttpRequest& request, HttpResponse& response) const;
+
 private:
     std::unordered_map<std::string, RouteHandler> get_routes_;
     std::unordered_map<std::string, RouteHandler> post_routes_;

@@ -42,7 +42,7 @@ std::string HttpResponse::ToString() const {
     response << "HTTP/1.1 " << status_code_ << ' ' << status_message_ << "\r\n";
 
     auto headers = headers_;
-    if (!headers.contains("Content-Type")) {
+    if (headers.find("Content-Type") == headers.end()) {
         headers["Content-Type"] = "text/plain; charset=utf-8";
     }
     headers["Content-Length"] = std::to_string(body_.size());
