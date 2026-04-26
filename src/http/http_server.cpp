@@ -6,6 +6,7 @@
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <utility>
 #include <unistd.h>
 
 #include "http/http_context.h"
@@ -71,7 +72,7 @@ void HttpServer::Start() {
                 response.SetStatusCode(400);
                 response.SetStatusMessage("Bad Request");
                 response.SetBody("400 Bad Request\n");
-            } else {
+            } else if (middlewares_.Run(context.request(), response)) {
                 router_.Route(context.request(), response);
             }
         }
@@ -94,6 +95,10 @@ void HttpServer::Start() {
 
 Router& HttpServer::routes() {
     return router_;
+}
+
+void HttpServer::Use(Middleware middleware) {
+    middlewares_.Use(std::move(middleware));
 }
 
 } // namespace muduo_http

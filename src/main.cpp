@@ -3,9 +3,13 @@
 
 #include "http/http_response.h"
 #include "http/http_server.h"
+#include "http/middleware.h"
 
 int main() {
     muduo_http::HttpServer server(8080);
+
+    server.Use(muduo_http::CreateLoggingMiddleware());
+    server.Use(muduo_http::CreateCorsMiddleware());
 
     server.routes().Get("/", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "text/plain; charset=utf-8");
