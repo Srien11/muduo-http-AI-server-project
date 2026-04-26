@@ -10,7 +10,9 @@
 目前已完成：
 1. `HttpResponse` 的基础构建与序列化
 2. `Router` 的最小路由分发能力（`GET` / `POST` + `404` 回退）
-3. `main.cpp` 最小闭环演示（构造请求 -> 路由处理 -> 输出响应）
+3. `HttpContext` 的基础 HTTP 请求解析（请求行、请求头、body）
+4. 动态路由参数匹配（例如 `/users/:id`）
+5. 基于 TCP socket 的最小 HTTP 网络闭环（接收请求 -> 解析 -> 路由 -> 响应）
 
 ## 项目结构
 
@@ -26,6 +28,20 @@ cmake -S . -B build
 cmake --build build
 ./build/muduo_http_server
 ```
+
+启动后可用另一个终端测试：
+
+```bash
+curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/users/42
+```
+
+当前示例接口：
+
+- `GET /` 返回框架欢迎文本
+- `GET /health` 返回健康检查结果
+- `GET /users/:id` 演示动态路由参数匹配
 
 ## 分批次开发约定
 
