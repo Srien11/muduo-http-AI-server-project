@@ -10,10 +10,13 @@ link_directories(/usr/local/lib)
 
 add_executable(muduo_http_server
     src/main.cpp
+    src/http/db_connection_pool.cpp
     src/http/http_context.cpp
+    src/http/https_server.cpp
     src/http/middleware.cpp
     src/http/router.cpp
     src/http/session.cpp
+    src/http/ssl_context.cpp
     src/http/http_server.cpp
     src/http/http_response.cpp
 )
@@ -22,4 +25,7 @@ target_link_libraries(muduo_http_server
     muduo_net
     muduo_base
     pthread
+    mysqlclient
+    ssl
+    crypto
 )

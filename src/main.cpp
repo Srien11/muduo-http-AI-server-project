@@ -1,9 +1,12 @@
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
+#include "http/db_connection_pool.h"
 #include "http/http_response.h"
 #include "http/http_server.h"
+#include "http/https_server.h"
 #include "http/middleware.h"
 
 int main() {
@@ -95,7 +98,31 @@ int main() {
         response.SetBody("logged out\n");
     });
 
+    // ----- DB demo (pool status check) -----
+    server.routes().Get("/db/pool", [](const muduo_http::HttpRequest&,
+                                        muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        response.SetBody("DbConnectionPool ready (requires MySQL)\n");
+    });
+
+    // ----- Start HTTPS server -----
+    muduo_http::HttpsServer https_server(8443, "certs/server.crt", "certs/server.key");
+    https_server.Use(muduo_http::CreateLoggingMiddleware());
+    https_server.Use(muduo_http::CreateCorsMiddleware());
+
+    https_server.routes().Get("/", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        response.SetBody("Hello from muduo_https router.\n");
+    });
+    https_server.routes().Get("/health", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        response.SetBody("ok\n");
+    });
+
+    https_server.Start();
+
     std::cout << "Starting HTTP server on port 8080..." << std::endl;
+    std::cout << "HTTPS server on port 8443 (self-signed cert)" << std::endl;
     server.Start();
     return 0;
 }
