@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include_directories(include)
+link_directories(/usr/local/lib)
 
 add_executable(muduo_http_server
     src/main.cpp
@@ -16,3 +17,8 @@ add_executable(muduo_http_server
     src/http/http_response.cpp
 )
 
+target_link_libraries(muduo_http_server
+    muduo_net
+    muduo_base
+    pthread
+)
