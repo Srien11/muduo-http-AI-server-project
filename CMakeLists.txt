@@ -13,6 +13,7 @@ add_executable(muduo_http_server
     src/http/http_context.cpp
     src/http/middleware.cpp
     src/http/router.cpp
+    src/http/session.cpp
     src/http/http_server.cpp
     src/http/http_response.cpp
 )

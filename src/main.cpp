@@ -9,6 +9,7 @@
 int main() {
     muduo_http::HttpServer server(8080);
 
+    // Session middleware is registered automatically by HttpServer
     server.Use(muduo_http::CreateLoggingMiddleware());
     server.Use(muduo_http::CreateCorsMiddleware());
 
@@ -55,6 +56,43 @@ int main() {
     server.routes().Get("/crash", [](const muduo_http::HttpRequest&,
                                       muduo_http::HttpResponse&) {
         throw std::runtime_error("simulated crash");
+    });
+
+    // ----- Session demo -----
+    // POST /session/login - set username in session
+    server.routes().Post("/session/login", [](const muduo_http::HttpRequest& request,
+                                               muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        if (!request.session) {
+            response.SetBody("session not available\n");
+            return;
+        }
+        // Use the request body as username
+        request.session->Set("username", request.body.empty() ? "anonymous" : request.body);
+        response.SetBody("logged in as " + request.session->Get("username") + "\n");
+    });
+
+    // GET /session/me - return current user info (requires login)
+    server.routes().Get("/session/me", [](const muduo_http::HttpRequest& request,
+                                           muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        if (!request.session || !request.session->Has("username")) {
+            response.SetStatusCode(401);
+            response.SetBody("401 Unauthorized - please POST /session/login first\n");
+            return;
+        }
+        response.SetBody("current user: " + request.session->Get("username") +
+                         " (session: " + request.session->id().substr(0, 8) + "...)\n");
+    });
+
+    // POST /session/logout - clear session data
+    server.routes().Post("/session/logout", [](const muduo_http::HttpRequest& request,
+                                                muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        if (request.session) {
+            request.session->Clear();
+        }
+        response.SetBody("logged out\n");
     });
 
     std::cout << "Starting HTTP server on port 8080..." << std::endl;

@@ -11,6 +11,7 @@
 #include "http/http_request.h"
 #include "http/middleware.h"
 #include "http/router.h"
+#include "http/session.h"
 
 namespace muduo_http {
 
@@ -28,6 +29,10 @@ public:
     void set_max_body_size(size_t bytes) { max_body_size_ = bytes; }
     size_t max_body_size() const { return max_body_size_; }
 
+    // Session
+    std::shared_ptr<SessionManager> session_manager() const { return session_manager_; }
+    void set_session_timeout(int seconds);
+
 private:
     void onConnection(const muduo::net::TcpConnectionPtr& conn);
     void onMessage(const muduo::net::TcpConnectionPtr& conn,
@@ -41,6 +46,7 @@ private:
     muduo::net::TcpServer server_;
     Router router_;
     MiddlewareChain middlewares_;
+    std::shared_ptr<SessionManager> session_manager_;
     size_t max_body_size_{1024 * 1024};  // 1MB default
 };
 

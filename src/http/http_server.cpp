@@ -24,7 +24,8 @@ HttpServer::HttpServer(int port)
               muduo::net::InetAddress(static_cast<uint16_t>(port)),
               "muduo_http"),
       router_(),
-      middlewares_() {
+      middlewares_(),
+      session_manager_(std::make_shared<SessionManager>()) {
     server_.setConnectionCallback(
         std::bind(&HttpServer::onConnection, this, std::placeholders::_1));
     server_.setMessageCallback(
@@ -32,6 +33,9 @@ HttpServer::HttpServer(int port)
                   std::placeholders::_1,
                   std::placeholders::_2,
                   std::placeholders::_3));
+
+    // Register default session middleware
+    middlewares_.Use(CreateSessionMiddleware(session_manager_));
 }
 
 void HttpServer::Start() {
@@ -133,6 +137,10 @@ Router& HttpServer::routes() {
 
 void HttpServer::Use(Middleware middleware) {
     middlewares_.Use(std::move(middleware));
+}
+
+void HttpServer::set_session_timeout(int seconds) {
+    session_manager_ = std::make_shared<SessionManager>(seconds);
 }
 
 } // namespace muduo_http
