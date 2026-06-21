@@ -10,10 +10,12 @@ link_directories(/usr/local/lib)
 
 add_executable(muduo_http_server
     src/main.cpp
+    src/http/ai_gateway.cpp
     src/http/db_connection_pool.cpp
     src/http/http_context.cpp
     src/http/https_server.cpp
     src/http/middleware.cpp
+    src/http/rate_limiter.cpp
     src/http/router.cpp
     src/http/session.cpp
     src/http/ssl_context.cpp
@@ -29,4 +31,5 @@ target_link_libraries(muduo_http_server
     mysqlclient
     ssl
     crypto
+    curl
 )

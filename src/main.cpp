@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "http/ai_gateway.h"
 #include "http/db_connection_pool.h"
 #include "http/http_response.h"
 #include "http/http_server.h"
@@ -141,6 +142,69 @@ int main() {
                                         muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "text/plain; charset=utf-8");
         response.SetBody("DbConnectionPool ready (requires MySQL)\n");
+    });
+
+    // ----- AI Gateway demo -----
+    muduo_http::AiConfig ai_cfg;
+    // ai_cfg.api_key = std::getenv("OPENAI_API_KEY") ?: "";
+    ai_cfg.api_base = "https://api.openai.com/v1";
+    ai_cfg.model = "gpt-3.5-turbo";
+    ai_cfg.rate_limit_rps = 5;
+    ai_cfg.cache_enabled = true;
+
+    auto ai_gateway = std::make_shared<muduo_http::AiGateway>(ai_cfg);
+
+    // GET /ai/health - check gateway status
+    server.routes().Get("/ai/health", [](const muduo_http::HttpRequest&,
+                                          muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        response.SetBody("AI Gateway ready (set OPENAI_API_KEY to use)\n");
+    });
+
+    // POST /ai/chat - synchronous chat completion
+    server.routes().Post("/ai/chat", [ai_gateway](const muduo_http::HttpRequest& req,
+                                                   muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+
+        if (ai_gateway->config().api_key.empty()) {
+            response.SetBody("Set OPENAI_API_KEY environment variable first\n");
+            return;
+        }
+
+        muduo_http::AiChatRequest chat_req;
+        chat_req.messages.push_back({"user", req.body.empty() ? "Say hello" : req.body});
+        chat_req.stream = false;
+
+        auto result = ai_gateway->Chat(chat_req);
+        if (result.success) {
+            response.SetBody(result.content + "\n");
+        } else {
+            response.SetStatusCode(502);
+            response.SetBody("AI error: " + result.error_message + "\n");
+        }
+    });
+
+    // GET /ai/chat/stream - streaming chat via SSE
+    server.routes().Get("/ai/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
+                                                         muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            req.stream_conn, 200, "OK", "text/event-stream");
+        req.stream = writer;
+
+        writer->WriteSSE("info", "streaming AI chat (requires OPENAI_API_KEY)");
+
+        if (ai_gateway->config().api_key.empty()) {
+            writer->WriteSSE("error", "OPENAI_API_KEY not set");
+            writer->WriteSSE("done", "failed");
+            writer->End();
+            return;
+        }
+
+        muduo_http::AiChatRequest chat_req;
+        chat_req.messages.push_back({"user", "Tell me a short joke"});
+        chat_req.stream = true;
+
+        ai_gateway->ChatStream(chat_req, *writer);
     });
 
     // ----- Start HTTPS server -----
