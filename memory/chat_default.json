@@ -16,5 +16,35 @@
     "name": "",
     "role": "user",
     "tool_call_id": ""
+  },
+  {
+    "content": ".",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
+  },
+  {
+    "content": "你好",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
+  },
+  {
+    "content": "nihao1",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
+  },
+  {
+    "content": "你好",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
+  },
+  {
+    "content": ".",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
   }
 ]

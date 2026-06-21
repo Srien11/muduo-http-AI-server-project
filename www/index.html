@@ -224,14 +224,17 @@ async function loadSessions() {
 async function saveSettings() {
   const key = document.getElementById('sApiKey').value;
   const model = document.getElementById('sModel').value;
+  const base = document.getElementById('sApiBase').value;
   try {
     await fetch('/api/config', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({api_key: key, model: model})
+      body: JSON.stringify({api_key: key, model: model, api_base: base})
     });
     document.getElementById('modelBadge').textContent = model || 'gpt-3.5-turbo';
     document.getElementById('keyHint').textContent = key ? '已配置 API Key' : '未配置 API Key';
+    // Reload to reflect saved values
+    loadConfig();
     closeSettings();
   } catch(e) { alert('保存失败: '+e.message); }
 }

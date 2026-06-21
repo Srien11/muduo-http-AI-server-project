@@ -578,7 +578,7 @@ int main(int argc, char* argv[]) {
                     auto next_sec = content.find("[", pos + 4);
                     if (key_pos != std::string::npos && key_pos < next_sec) {
                         auto eol = content.find('\n', key_pos);
-                        content.replace(key_pos, eol - key_pos, "api_key = " + key);
+                        content.replace(key_pos, eol - key_pos + 1, "api_key = " + key + "\n");
                     } else {
                         auto ai_eol = content.find('\n', pos) + 1;
                         content.insert(ai_eol, "api_key = " + key + "\n");
@@ -586,15 +586,48 @@ int main(int argc, char* argv[]) {
                 }
             }
 
+            if (body.contains("model")) {
+                std::string model = body["model"].get<std::string>();
+                auto pos = content.find("[ai]");
+                auto m_pos = content.find("model", pos);
+                auto next_sec = content.find("[", pos + 4);
+                if (m_pos != std::string::npos && m_pos < next_sec) {
+                    auto eol = content.find('\n', m_pos);
+                    content.replace(m_pos, eol - m_pos + 1, "model = " + model + "\n");
+                } else {
+                    auto ai_eol = content.find('\n', pos) + 1;
+                    content.insert(ai_eol, "model = " + model + "\n");
+                }
+            }
+
+            if (body.contains("api_base")) {
+                std::string base = body["api_base"].get<std::string>();
+                auto pos = content.find("[ai]");
+                auto b_pos = content.find("api_base", pos);
+                auto next_sec = content.find("[", pos + 4);
+                if (b_pos != std::string::npos && b_pos < next_sec) {
+                    auto eol = content.find('\n', b_pos);
+                    content.replace(b_pos, eol - b_pos + 1, "api_base = " + base + "\n");
+                } else {
+                    auto ai_eol = content.find('\n', pos) + 1;
+                    content.insert(ai_eol, "api_base = " + base + "\n");
+                }
+            }
+
             std::ofstream out("server.conf");
             out << content;
 
             // Update running gateway
-            if (body.contains("api_key")) {
+            if (body.contains("api_key"))
                 ai_gateway->SetApiKey(body["api_key"].get<std::string>());
-            }
-            if (body.contains("model")) {
+            if (body.contains("model"))
                 ai_gateway->SetModel(body["model"].get<std::string>());
+            if (body.contains("api_base")) {
+                std::string base = body["api_base"].get<std::string>();
+                if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
+                    if (base.back() == '/') base += "v1"; else base += "/v1";
+                }
+                ai_gateway->SetApiBase(base);
             }
 
             nlohmann::json resp = {{"status", "saved"}};
