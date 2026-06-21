@@ -215,15 +215,14 @@
 |--------|------|------|
 | M5 AI 流式与推理网关 | I9 SSE + I10 推理网关 | ✅ |
 | M6 生产化补全 | I11 静态文件/上传 + I12 配置/日志/优雅退出 | ⏳ |
-| M7 工具调用引擎 | I13 Function Calling | ⏳ |
-| M8 多模型与 RAG | I14 多模型路由 + I15 RAG管道 | ⏳ |
+| M7 MCP 协议引擎 | I13 MCP Server（JSON-RPC + 工具注册 + SSE 传输） | ⏳ |
+| M8 AI 引擎完成 | I14 多模型路由 + I15 RAG管道 + I16 长期记忆 + I17 记忆管理 | ⏳ |
 
 ### Phase 3：高级能力 ⏳
 | 里程碑 | 迭代 | 状态 |
 |--------|------|------|
-| M9 长期记忆 | I16 对话持久化 | ⏳ |
-| M10 跨语言推理 | I17 Python进程桥 | ⏳ |
-| M11 标准协议与部署 | I18 MCP + I19 前端 + I20 Docker/CI | ⏳ |
+| M9 跨语言推理 | I18 Python进程桥 | ⏳ |
+| M10 标准协议与部署 | I19 MCP + I20 前端 + I21 Docker/CI | ⏳ |
 
 ---
 
@@ -336,7 +335,8 @@
 | Session | muduo::Timestamp | HttpServer, 中间件 |
 | AiGateway | libcurl, Config, Cache | 业务 handler |
 | ModelRouter | AiGateway (接口), Config | AiGateway |
-| ToolExecutor | ModelRouter, Tool 定义 | 业务 handler |
+| McpServer | JSON-RPC, AiGateway, Tool Registry | 业务 handler, 外部 MCP 客户端 |
+| ModelRouter | AiGateway (接口), Config | AiGateway |
 | RAGPipeline | Embedder, VectorStore | 业务 handler |
 | PythonBridge | Unix Socket | 业务 handler |
 | DbConnectionPool | MySQL | 业务层 |
@@ -365,16 +365,17 @@ src/http/               ← 全部实现文件
 | I12 | 配置文件 + 结构日志 + 优雅退出 | 没有这些就不能上线 |
 
 **Phase 2：AI 核心（能用 AI）**
-| I13 | Function Calling 工具调度 | AI 调用 C++ 函数的核心引擎 |
+| I13 | MCP Server 实现 | 标准 MCP 协议（JSON-RPC + 工具注册 + SSE 传输） |
 | I14 | 多模型路由 + 熔断降级 | 不绑死单一供应商 |
 | I15 | RAG 管道（文档→向量→检索） | 知识库问答 |
 | I16 | 长期记忆（对话持久化 MySQL） | 跨会话记忆 |
+| I17 | 记忆管理 | 短时+长时融合，上下文窗口管理 |
 
 **Phase 3：高级能力**
-| I17 | C++-Python 进程桥 | 绕开 HTTP，本地推理 |
-| I18 | MCP 协议兼容 | 标准工具协议 |
-| I19 | 前端管理页面 | 可视化使用 |
-| I20 | Docker + CI/CD 部署 | 让别人也能跑 |
+| I18 | C++-Python 进程桥 | 绕开 HTTP，本地推理 |
+| I19 | MCP Web Client | 浏览器连接 MCP Server |
+| I20 | 前端管理页面 | 可视化使用 |
+| I21 | Docker + CI/CD 部署 | 让别人也能跑 |
 
 ### 9.6 架构保障措施
 
