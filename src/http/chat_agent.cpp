@@ -39,10 +39,22 @@ AiChatResponse ChatAgent::Process(const std::string& user_message) {
 
         // If LLM wants to call tools
         if (response.has_tool_calls()) {
+            // Build tool_calls JSON for the assistant message
+            nlohmann::json tc_json = nlohmann::json::array();
+            for (auto& tc : response.tool_calls) {
+                nlohmann::json tc_obj;
+                tc_obj["id"] = tc.id;
+                tc_obj["type"] = "function";
+                tc_obj["function"] = {{"name", tc.name}, {"arguments", tc.arguments}};
+                tc_json.push_back(tc_obj);
+            }
+
             // Add assistant message with tool_calls to history
-            // For now, we store the content (which might be empty) and append tool call info
-            std::string assistant_content = response.content;
-            history_.push_back({"assistant", assistant_content});
+            AiChatMessage assistant_msg;
+            assistant_msg.role = "assistant";
+            assistant_msg.content = response.content;
+            assistant_msg.tool_calls = tc_json;
+            history_.push_back(assistant_msg);
 
             // Execute each tool call
             for (auto& tc : response.tool_calls) {
@@ -93,12 +105,16 @@ bool ChatAgent::SaveHistory(const std::string& filepath) const {
     try {
         nlohmann::json j = nlohmann::json::array();
         for (const auto& msg : history_) {
-            j.push_back({
+            nlohmann::json entry = {
                 {"role", msg.role},
                 {"content", msg.content},
                 {"tool_call_id", msg.tool_call_id},
                 {"name", msg.name}
-            });
+            };
+            if (!msg.tool_calls.is_null()) {
+                entry["tool_calls"] = msg.tool_calls;
+            }
+            j.push_back(entry);
         }
         std::ofstream file(filepath);
         file << j.dump(2);
@@ -119,6 +135,7 @@ bool ChatAgent::LoadHistory(const std::string& filepath) {
             msg.content = item.value("content", "");
             msg.tool_call_id = item.value("tool_call_id", "");
             msg.name = item.value("name", "");
+            if (item.contains("tool_calls")) { msg.tool_calls = item["tool_calls"]; }
             history_.push_back(msg);
         }
         return true;

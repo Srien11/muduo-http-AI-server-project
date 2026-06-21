@@ -36,6 +36,7 @@ struct AiChatMessage {
     std::string content;
     std::string tool_call_id;    // for tool responses
     std::string name;           // for tool responses
+    nlohmann::json tool_calls;   // for assistant messages with tool_calls
 };
 
 struct AiChatRequest {

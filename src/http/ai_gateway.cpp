@@ -231,6 +231,11 @@ std::string AiGateway::BuildRequestBody(const AiChatRequest& request) {
             j["tool_call_id"] = msg.tool_call_id;
         }
 
+        // Tool calls in assistant messages
+        if (msg.role == "assistant" && !msg.tool_calls.is_null()) {
+            j["tool_calls"] = msg.tool_calls;
+        }
+
         msgs.push_back(j);
     }
     body["messages"] = msgs;
