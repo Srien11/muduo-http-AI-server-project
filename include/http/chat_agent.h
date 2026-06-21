@@ -28,8 +28,17 @@ public:
     // Clear conversation history
     void ClearHistory();
 
+    // Persist history to file
+    bool SaveHistory(const std::string& filepath) const;
+    bool LoadHistory(const std::string& filepath);
+
     // Access conversation history
     std::vector<AiChatMessage>& history() { return history_; }
+    const std::vector<AiChatMessage>& history() const { return history_; }
+
+    // Get the current session ID
+    const std::string& session_id() const { return session_id_; }
+    void set_session_id(const std::string& id) { session_id_ = id; }
 
     // Set available tools (JSON array of tool definitions for OpenAI API)
     void SetTools(const nlohmann::json& tools);
@@ -38,6 +47,7 @@ private:
     std::shared_ptr<AiGateway> gateway_;
     ToolExecutor tool_executor_;
     std::vector<AiChatMessage> history_;
+    std::string session_id_;
     nlohmann::json tools_;
     std::string system_prompt_;
     int max_tool_calls_{10};  // Prevent infinite loops

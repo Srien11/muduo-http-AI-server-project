@@ -19,6 +19,7 @@
 #include "http/log_manager.h"
 #include "http/mcp/mcp_protocol.h"
 #include "http/mcp/mcp_server.h"
+#include "http/memory_manager.h"
 #include "http/middleware.h"
 #include "http/multipart_parser.h"
 #include "http/static_file_handler.h"
@@ -656,6 +657,43 @@ int main(int argc, char* argv[]) {
             nlohmann::json resp = {{"error", std::string("parse error: ") + e.what()}};
             response.SetStatusCode(400);
             response.SetBody(resp.dump());
+        }
+    });
+
+    // ----- Memory-backed Chat (long-term memory) -----
+    auto memory_manager = std::make_shared<muduo_http::MemoryManager>(
+        chat_agent, ai_gateway, "memory");
+
+    // POST /chat/memory - chat with long-term memory persistence
+    server.routes().Post("/chat/memory", [memory_manager](const muduo_http::HttpRequest& req,
+                                                           muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string message = body.value("message", "");
+            std::string session = body.value("session_id", "default");
+
+            if (body.value("clear", false)) {
+                memory_manager->ClearSession(session);
+                response.SetBody(nlohmann::json({{"response", "Memory cleared."}}).dump());
+                return;
+            }
+
+            if (message.empty()) {
+                response.SetBody(nlohmann::json({{"error", "Message required"}}).dump());
+                return;
+            }
+
+            auto result = memory_manager->Process(message, session);
+            if (result.success) {
+                response.SetBody(nlohmann::json({{"response", result.content}}).dump());
+            } else {
+                response.SetStatusCode(502);
+                response.SetBody(nlohmann::json({{"error", result.error_message}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
         }
     });
 

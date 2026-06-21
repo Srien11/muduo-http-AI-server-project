@@ -23,6 +23,7 @@ add_executable(muduo_http_server
     src/http/mcp/mcp_session.cpp
     src/http/mcp/mcp_tool.cpp
     src/http/mcp/mcp_transport.cpp
+    src/http/memory_manager.cpp
     src/http/middleware.cpp
     src/http/model_router.cpp
     src/http/multipart_parser.cpp

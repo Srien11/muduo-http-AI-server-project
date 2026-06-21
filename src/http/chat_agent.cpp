@@ -1,6 +1,9 @@
 #include "http/chat_agent.h"
 
+#include <fstream>
 #include <iostream>
+
+#include "http/mcp/json.hpp"
 
 namespace muduo_http {
 
@@ -84,6 +87,42 @@ AiChatResponse ChatAgent::Process(const std::string& user_message) {
 
 void ChatAgent::ClearHistory() {
     history_.clear();
+}
+
+bool ChatAgent::SaveHistory(const std::string& filepath) const {
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& msg : history_) {
+            j.push_back({
+                {"role", msg.role},
+                {"content", msg.content},
+                {"tool_call_id", msg.tool_call_id},
+                {"name", msg.name}
+            });
+        }
+        std::ofstream file(filepath);
+        file << j.dump(2);
+        return true;
+    } catch (...) { return false; }
+}
+
+bool ChatAgent::LoadHistory(const std::string& filepath) {
+    try {
+        std::ifstream file(filepath);
+        if (!file.is_open()) return false;
+        nlohmann::json j;
+        file >> j;
+        history_.clear();
+        for (auto& item : j) {
+            AiChatMessage msg;
+            msg.role = item["role"];
+            msg.content = item.value("content", "");
+            msg.tool_call_id = item.value("tool_call_id", "");
+            msg.name = item.value("name", "");
+            history_.push_back(msg);
+        }
+        return true;
+    } catch (...) { return false; }
 }
 
 void ChatAgent::SetTools(const nlohmann::json& tools) {
