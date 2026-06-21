@@ -9,6 +9,7 @@
 #include "http/http_server.h"
 #include "http/https_server.h"
 #include "http/middleware.h"
+#include "http/static_file_handler.h"
 #include "http/stream_writer.h"
 
 int main() {
@@ -205,6 +206,21 @@ int main() {
         chat_req.stream = true;
 
         ai_gateway->ChatStream(chat_req, *writer);
+    });
+
+    // ----- Static file service -----
+    auto file_handler = std::make_shared<muduo_http::StaticFileHandler>("www");
+
+    // Catch-all: serve static files for non-API paths
+    // Must be registered after all API routes
+    server.routes().Get("/:path", [file_handler](const muduo_http::HttpRequest& req,
+                                                  muduo_http::HttpResponse& response) {
+        std::string path = req.path_params.at("path");
+        if (!file_handler->Serve("/" + path, response)) {
+            response.SetStatusCode(404);
+            response.SetStatusMessage("Not Found");
+            response.SetBody("404 Not Found\n");
+        }
     });
 
     // ----- Start HTTPS server -----

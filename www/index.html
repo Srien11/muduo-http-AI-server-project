@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Muduo HTTP Server</title>
+<style>
+body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+h1 { color: #2563eb; }
+pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Muduo HTTP Server</h1>
+<p>C++17 HTTP framework on Muduo Reactor.</p>
+<ul>
+<li><a href="/health">Health Check</a></li>
+<li><a href="/session/me">Session Demo</a></li>
+<li><a href="/ai/health">AI Gateway</a></li>
+</ul>
+<h2>API Endpoints</h2>
+<pre>GET  /            - Welcome
+GET  /health      - Health check
+GET  /users/:id   - Dynamic route
+POST /echo        - Echo body
+POST /session/login  - Login
+GET  /session/me  - Current user
+POST /ai/chat     - AI chat
+GET  /events      - SSE stream</pre>
+<p>Powered by muduo_http/0.1</p>
+</body>
+</html>

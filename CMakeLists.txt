@@ -19,6 +19,7 @@ add_executable(muduo_http_server
     src/http/router.cpp
     src/http/session.cpp
     src/http/ssl_context.cpp
+    src/http/static_file_handler.cpp
     src/http/stream_writer.cpp
     src/http/http_server.cpp
     src/http/http_response.cpp
