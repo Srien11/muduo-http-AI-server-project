@@ -9,6 +9,7 @@
 #include "http/ai_gateway.h"
 #include "http/chat_agent.h"
 #include "http/config_manager.h"
+#include "http/model_router.h"
 #include "http/db_connection_pool.h"
 #include "http/graceful_shutdown.h"
 #include "http/http_response.h"
@@ -187,6 +188,54 @@ int main(int argc, char* argv[]) {
     ai_cfg.cache_enabled = cfg.GetBool("ai.cache_enabled", true);
 
     auto ai_gateway = std::make_shared<muduo_http::AiGateway>(ai_cfg);
+
+    // ----- Model Router (multi-provider with fallback) -----
+    auto model_router = std::make_shared<muduo_http::ModelRouter>();
+    model_router->AddProvider({"openai",
+                               cfg.Get("ai.api_base", "https://api.openai.com/v1"),
+                               cfg.Get("ai.api_key", ""),
+                               cfg.Get("ai.model", "gpt-3.5-turbo"),
+                               cfg.GetInt("ai.timeout_seconds", 60),
+                               100});
+
+    // GET /router/status - show provider status
+    server.routes().Get("/router/status", [model_router](const muduo_http::HttpRequest&,
+                                                          muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        auto statuses = model_router->GetStatus();
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& s : statuses) {
+            j.push_back({{"name", s.name}, {"model", s.model},
+                         {"state", s.state}, {"enabled", s.enabled}});
+        }
+        response.SetBody(j.dump(2));
+    });
+
+    // POST /router/chat - chat via router (with fallback)
+    server.routes().Post("/router/chat", [model_router](const muduo_http::HttpRequest& req,
+                                                         muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string msg = body.value("message", "");
+            if (msg.empty()) {
+                response.SetBody(nlohmann::json({{"error", "message required"}}).dump());
+                return;
+            }
+            muduo_http::AiChatRequest chat_req;
+            chat_req.messages.push_back({"user", msg});
+            auto result = model_router->Chat(chat_req);
+            if (result.success) {
+                response.SetBody(nlohmann::json({{"response", result.content}}).dump());
+            } else {
+                response.SetStatusCode(502);
+                response.SetBody(nlohmann::json({{"error", result.error_message}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", std::string("parse: ") + e.what()}}).dump());
+        }
+    });
 
     // GET /ai/health - check gateway status
     server.routes().Get("/ai/health", [](const muduo_http::HttpRequest&,

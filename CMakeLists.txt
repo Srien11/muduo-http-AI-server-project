@@ -24,6 +24,7 @@ add_executable(muduo_http_server
     src/http/mcp/mcp_tool.cpp
     src/http/mcp/mcp_transport.cpp
     src/http/middleware.cpp
+    src/http/model_router.cpp
     src/http/multipart_parser.cpp
     src/http/rate_limiter.cpp
     src/http/router.cpp
