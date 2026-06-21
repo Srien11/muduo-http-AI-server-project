@@ -11,6 +11,7 @@ link_directories(/usr/local/lib)
 add_executable(muduo_http_server
     src/main.cpp
     src/http/ai_gateway.cpp
+    src/http/chat_agent.cpp
     src/http/config_manager.cpp
     src/http/db_connection_pool.cpp
     src/http/graceful_shutdown.cpp

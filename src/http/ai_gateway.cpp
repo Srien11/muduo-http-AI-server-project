@@ -210,79 +210,86 @@ void AiGateway::ChatStream(const AiChatRequest& request, StreamWriter& writer) {
 }
 
 std::string AiGateway::BuildRequestBody(const AiChatRequest& request) {
-    std::ostringstream body;
-    body << "{";
-    body << "\"model\": \"" << (request.model.empty() ? config_.model : request.model) << "\",";
-    body << "\"messages\": [";
+    nlohmann::json body;
+    body["model"] = request.model.empty() ? config_.model : request.model;
 
-    for (size_t i = 0; i < request.messages.size(); ++i) {
-        if (i > 0) body << ",";
-        body << "{";
-        body << "\"role\": \"" << request.messages[i].role << "\",";
-        body << "\"content\": \"" << request.messages[i].content << "\"";
-        body << "}";
+    // Build messages array
+    nlohmann::json msgs = nlohmann::json::array();
+    for (const auto& msg : request.messages) {
+        nlohmann::json j;
+        j["role"] = msg.role;
+        j["content"] = msg.content;
+
+        // Tool call responses
+        if (msg.role == "tool") {
+            j["tool_call_id"] = msg.tool_call_id;
+        }
+
+        msgs.push_back(j);
+    }
+    body["messages"] = msgs;
+
+    // Add tools if provided
+    if (!request.tools.is_null() && !request.tools.empty()) {
+        body["tools"] = request.tools;
     }
 
-    body << "],";
-    body << "\"max_tokens\": " << (request.max_tokens > 0 ? request.max_tokens : config_.max_tokens) << ",";
-    body << "\"temperature\": " << request.temperature;
-    body << "}";
+    body["max_tokens"] = request.max_tokens > 0 ? request.max_tokens : config_.max_tokens;
+    body["temperature"] = request.temperature;
 
-    return body.str();
+    return body.dump();
 }
 
 AiChatResponse AiGateway::ParseResponse(const std::string& body) {
     AiChatResponse response;
 
-    // Simple JSON field extraction (without full JSON parser)
-    // Find "content": "..."
-    auto content_pos = body.find("\"content\":\"");
-    if (content_pos == std::string::npos) {
-        content_pos = body.find("\"content\": \"");
-    }
+    try {
+        auto json = nlohmann::json::parse(body);
 
-    if (content_pos != std::string::npos) {
-        content_pos = body.find('"', content_pos + 10);  // Skip past "content": "
-        if (content_pos != std::string::npos) {
-            auto end_pos = body.find('"', content_pos + 1);
-            // Handle escaped quotes
-            while (end_pos != std::string::npos && end_pos > 0 && body[end_pos - 1] == '\\') {
-                end_pos = body.find('"', end_pos + 1);
-            }
-            if (end_pos != std::string::npos) {
-                response.content = body.substr(content_pos + 1, end_pos - content_pos - 1);
-                response.success = true;
+        // Check for error
+        if (json.contains("error")) {
+            response.error_message = json["error"].value("message", "API error");
+            return response;
+        }
+
+        // Extract choices
+        auto& choices = json["choices"];
+        if (choices.empty()) {
+            response.error_message = "no choices in response";
+            return response;
+        }
+
+        auto& choice = choices[0];
+        auto& message = choice["message"];
+
+        // Check for finish reason - if "tool_calls", extract them
+        std::string finish_reason = choice.value("finish_reason", "stop");
+
+        // Extract text content
+        if (message.contains("content") && !message["content"].is_null()) {
+            response.content = message["content"];
+        }
+
+        // Extract tool calls
+        if (finish_reason == "tool_calls" && message.contains("tool_calls")) {
+            for (auto& tc : message["tool_calls"]) {
+                AiChatResponse::ToolCall tool_call;
+                tool_call.id = tc["id"];
+                tool_call.name = tc["function"]["name"];
+                tool_call.arguments = tc["function"]["arguments"];
+                response.tool_calls.push_back(tool_call);
             }
         }
-    }
 
-    // Extract token usage
-    auto prompt_pos = body.find("\"prompt_tokens\":");
-    if (prompt_pos != std::string::npos) {
-        response.prompt_tokens = std::stoi(body.substr(prompt_pos + 15));
-    }
-    auto completion_pos = body.find("\"completion_tokens\":");
-    if (completion_pos != std::string::npos) {
-        response.completion_tokens = std::stoi(body.substr(completion_pos + 18));
-    }
+        // Extract usage
+        if (json.contains("usage")) {
+            response.prompt_tokens = json["usage"].value("prompt_tokens", 0);
+            response.completion_tokens = json["usage"].value("completion_tokens", 0);
+        }
 
-    if (!response.success) {
-        // Try to extract error message
-        auto error_pos = body.find("\"message\":\"");
-        if (error_pos == std::string::npos) {
-            error_pos = body.find("\"message\": \"");
-        }
-        if (error_pos != std::string::npos) {
-            error_pos = body.find('"', error_pos + 10);
-            if (error_pos != std::string::npos) {
-                auto end_err = body.find('"', error_pos + 1);
-                if (end_err != std::string::npos) {
-                    response.error_message = body.substr(error_pos + 1, end_err - error_pos - 1);
-                }
-            }
-        } else {
-            response.error_message = "failed to parse response";
-        }
+        response.success = true;
+    } catch (const std::exception& e) {
+        response.error_message = std::string("parse error: ") + e.what();
     }
 
     return response;

@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "http/mcp/json.hpp"
+
 namespace muduo_http {
 
 struct AiConfig {
@@ -30,8 +32,10 @@ struct AiConfig {
 };
 
 struct AiChatMessage {
-    std::string role;       // "system", "user", "assistant"
+    std::string role;       // "system", "user", "assistant", "tool"
     std::string content;
+    std::string tool_call_id;    // for tool responses
+    std::string name;           // for tool responses
 };
 
 struct AiChatRequest {
@@ -40,6 +44,7 @@ struct AiChatRequest {
     int max_tokens = 2048;
     double temperature = 0.7;
     bool stream = false;
+    nlohmann::json tools;       // JSON array of tool definitions
 };
 
 struct AiChatResponse {
@@ -48,6 +53,14 @@ struct AiChatResponse {
     std::string error_message;
     int prompt_tokens = 0;
     int completion_tokens = 0;
+    // Tool calls from LLM
+    struct ToolCall {
+        std::string id;
+        std::string name;
+        std::string arguments;  // JSON string
+    };
+    std::vector<ToolCall> tool_calls;
+    bool has_tool_calls() const { return !tool_calls.empty(); }
 };
 
 } // namespace muduo_http

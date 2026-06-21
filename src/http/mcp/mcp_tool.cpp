@@ -36,6 +36,18 @@ nlohmann::json ToolDefinition::ToJson() const {
     };
 }
 
+nlohmann::json ToolDefinition::ToOpenAITool() const {
+    auto mcp_json = ToJson();
+    return {
+        {"type", "function"},
+        {"function", {
+            {"name", mcp_json["name"]},
+            {"description", mcp_json["description"]},
+            {"parameters", mcp_json["inputSchema"]}
+        }}
+    };
+}
+
 void ToolRegistry::Register(const ToolDefinition& def, ToolHandler handler) {
     tools_[def.name] = {def, std::move(handler)};
 }

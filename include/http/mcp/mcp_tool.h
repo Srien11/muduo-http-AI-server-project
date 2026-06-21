@@ -26,6 +26,9 @@ struct ToolDefinition {
     std::vector<ToolParam> parameters;
 
     nlohmann::json ToJson() const;
+
+    // Convert to OpenAI tool format (for API calls)
+    nlohmann::json ToOpenAITool() const;
 };
 
 // Tool execution result

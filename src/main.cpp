@@ -7,6 +7,7 @@
 #include <string>
 
 #include "http/ai_gateway.h"
+#include "http/chat_agent.h"
 #include "http/config_manager.h"
 #include "http/db_connection_pool.h"
 #include "http/graceful_shutdown.h"
@@ -468,6 +469,84 @@ int main(int argc, char* argv[]) {
         }
 
         response.SetBody(resp);
+    });
+
+    // ----- AI Chat Agent (LLM + MCP tools loop) -----
+    // Build MCP tool definitions as OpenAI tools format
+    nlohmann::json agent_tools = nlohmann::json::array();
+    auto mcp_tools = mcp_server->tools().ListTools();
+    for (const auto& tool : mcp_tools) {
+        agent_tools.push_back(tool.ToOpenAITool());
+    }
+
+    // Create tool executor that calls MCP tools
+    auto tool_executor = [&mcp_server](const std::string& name,
+                                        const std::string& args_json) -> std::string {
+        try {
+            auto args = nlohmann::json::parse(args_json);
+            auto result = mcp_server->tools().CallTool(name, args);
+            std::string output;
+            for (const auto& c : result.content) {
+                if (c.contains("text")) {
+                    output += c["text"].get<std::string>();
+                }
+            }
+            return output;
+        } catch (const std::exception& e) {
+            return std::string("Error: ") + e.what();
+        }
+    };
+
+    // Create chat agent
+    auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
+        ai_gateway, tool_executor,
+        "You are a helpful assistant with access to tools. "
+        "Use tools when needed to answer the user's questions. "
+        "The available tools are: read_file, list_directory, echo, system_info."
+    );
+
+    if (!agent_tools.empty()) {
+        chat_agent->SetTools(agent_tools);
+    }
+
+    // POST /chat - send a message to the AI agent
+    server.routes().Post("/chat", [chat_agent](const muduo_http::HttpRequest& req,
+                                                muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        response.SetHeader("Cache-Control", "no-cache");
+
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string message = body.value("message", "");
+            bool clear = body.value("clear", false);
+
+            if (clear) {
+                chat_agent->ClearHistory();
+                nlohmann::json resp = {{"response", "History cleared."}};
+                response.SetBody(resp.dump());
+                return;
+            }
+
+            if (message.empty()) {
+                nlohmann::json resp = {{"error", "Message is required"}};
+                response.SetBody(resp.dump());
+                return;
+            }
+
+            auto result = chat_agent->Process(message);
+            if (result.success) {
+                nlohmann::json resp = {{"response", result.content}};
+                response.SetBody(resp.dump());
+            } else {
+                nlohmann::json resp = {{"error", result.error_message}};
+                response.SetStatusCode(502);
+                response.SetBody(resp.dump());
+            }
+        } catch (const std::exception& e) {
+            nlohmann::json resp = {{"error", std::string("parse error: ") + e.what()}};
+            response.SetStatusCode(400);
+            response.SetBody(resp.dump());
+        }
     });
 
     // Graceful shutdown
