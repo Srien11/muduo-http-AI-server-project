@@ -32,6 +32,13 @@ int main(int argc, char* argv[]) {
     muduo_http::ConfigManager cfg;
     std::string config_file = "server.conf";
     if (argc > 1) config_file = argv[1];
+    // Fall back to example if no config file exists
+    std::ifstream conf_test(config_file);
+    if (!conf_test.is_open()) {
+        config_file = "server.conf.example";
+    } else {
+        conf_test.close();
+    }
     cfg.Load(config_file);
 
     // Setup logging

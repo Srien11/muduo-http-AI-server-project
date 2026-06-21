@@ -10,3 +10,9 @@ compile_commands.json
 .vscode/
 .idea/
 .DS_Store
+
+# Sensitive config - DO NOT COMMIT
+server.conf
+*.log
+memory/
+vectors.json

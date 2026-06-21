@@ -1,4 +1,4 @@
-# Muduo HTTP Server Config
+# Muduo HTTP Server Config (EXAMPLE - copy to server.conf)
 [server]
 port = 8080
 threads = 4
@@ -10,21 +10,14 @@ cert_file = certs/server.crt
 key_file = certs/server.key
 
 [ai]
-api_key = sk-509bdd2b62d94e13a2f67cf2bd9dbefc
-api_base = https://api.deepseek.com/v1
-model = deepseek v4
+api_key = sk-your-key-here
+api_base = https://api.openai.com/v1
+model = gpt-3.5-turbo
 rate_limit_rps = 10
 cache_enabled = true
 
 [session]
 timeout = 3600
-
-[db]
-host = 127.0.0.1
-port = 3306
-user = root
-password =
-database = muduo_http
 
 [log]
 level = info
