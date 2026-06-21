@@ -17,6 +17,11 @@ add_executable(muduo_http_server
     src/http/http_context.cpp
     src/http/https_server.cpp
     src/http/log_manager.cpp
+    src/http/mcp/mcp_protocol.cpp
+    src/http/mcp/mcp_server.cpp
+    src/http/mcp/mcp_session.cpp
+    src/http/mcp/mcp_tool.cpp
+    src/http/mcp/mcp_transport.cpp
     src/http/middleware.cpp
     src/http/multipart_parser.cpp
     src/http/rate_limiter.cpp

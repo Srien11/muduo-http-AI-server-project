@@ -1,5 +1,8 @@
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -11,6 +14,8 @@
 #include "http/http_server.h"
 #include "http/https_server.h"
 #include "http/log_manager.h"
+#include "http/mcp/mcp_protocol.h"
+#include "http/mcp/mcp_server.h"
 #include "http/middleware.h"
 #include "http/multipart_parser.h"
 #include "http/static_file_handler.h"
@@ -309,6 +314,161 @@ int main(int argc, char* argv[]) {
     });
 
     https_server.Start();
+
+    // ----- MCP Server -----
+    auto mcp_server = std::make_shared<muduo_http::mcp::McpServer>();
+    mcp_server->set_event_loop(server.get_loop());
+
+    // Register built-in tools
+    // echo - test tool
+    mcp_server->RegisterTool(
+        {"echo", "Echo back the input message",
+         {{"message", "Message to echo back", "string", true}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            std::string msg = args.value("message", "");
+            auto result = muduo_http::mcp::ToolResult{};
+            result.content.push_back(
+                muduo_http::mcp::McpProtocol::TextContent(msg));
+            return result;
+        });
+
+    // system_info - get system information
+    mcp_server->RegisterTool(
+        {"system_info", "Get system information (OS, CPU, memory, uptime)",
+         {}},
+        [](const nlohmann::json&) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            result.content.push_back(
+                muduo_http::mcp::McpProtocol::TextContent(
+                    "OS: Linux (WSL)\nCPU: x86_64\nRAM: N/A\nUptime: N/A\n"));
+            return result;
+        });
+
+    // read_file - read file contents
+    mcp_server->RegisterTool(
+        {"read_file", "Read the contents of a file",
+         {{"path", "Absolute path to the file", "string", true}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string path = args.value("path", "");
+            // Security: restrict to home directory
+            if (path.find("..") != std::string::npos || path[0] != '/') {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path"));
+                result.is_error = true;
+                return result;
+            }
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot open file"));
+                result.is_error = true;
+                return result;
+            }
+            std::ostringstream buf;
+            buf << file.rdbuf();
+            result.content.push_back(
+                muduo_http::mcp::McpProtocol::TextContent(buf.str()));
+            return result;
+        });
+
+    // list_directory - list files in a directory
+    mcp_server->RegisterTool(
+        {"list_directory", "List files in a directory",
+         {{"path", "Absolute path to the directory", "string", true}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string path = args.value("path", "");
+            if (path.find("..") != std::string::npos || path[0] != '/') {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path"));
+                result.is_error = true;
+                return result;
+            }
+            std::string cmd = "ls -la " + path + " 2>&1";
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot list directory"));
+                result.is_error = true;
+                return result;
+            }
+            char buf[1024];
+            std::string output;
+            while (fgets(buf, sizeof(buf), pipe)) output += buf;
+            pclose(pipe);
+            result.content.push_back(
+                muduo_http::mcp::McpProtocol::TextContent(output));
+            return result;
+        });
+
+    // Mount MCP server routes to HTTP server
+    // GET /mcp - SSE stream (for persistent MCP connections)
+    server.routes().Get("/mcp", [mcp_server](const muduo_http::HttpRequest& req,
+                                              muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            req.stream_conn, 200, "OK", "text/event-stream");
+        req.stream = writer;
+        writer->WriteSSE("endpoint", "/mcp/message");
+    });
+
+    // POST /mcp/message - Process JSON-RPC and return response directly
+    server.routes().Post("/mcp/message", [mcp_server](const muduo_http::HttpRequest& req,
+                                                       muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        response.SetHeader("Cache-Control", "no-cache");
+
+        // Parse JSON-RPC request
+        muduo_http::mcp::JsonRpcRequest json_req;
+        if (!muduo_http::mcp::McpProtocol::ParseRequest(req.body, json_req)) {
+            std::string err = muduo_http::mcp::McpProtocol::MakeError(
+                "", muduo_http::mcp::ErrorCode::kParseError, "Parse error");
+            response.SetBody(err);
+            return;
+        }
+
+        // Process based on method
+        std::string resp;
+        if (json_req.method == "initialize") {
+            // Build initialize response
+            nlohmann::json result = {
+                {"protocolVersion", "2024-11-05"},
+                {"serverInfo", {{"name", "muduo_mcp"}, {"version", "0.1.0"}}},
+                {"capabilities", {{"tools", true}, {"logging", true}}}
+            };
+            resp = muduo_http::mcp::McpProtocol::MakeResponse(json_req.id, result);
+        } else if (json_req.method == "ping") {
+            resp = muduo_http::mcp::McpProtocol::MakeResponse(
+                json_req.id, nlohmann::json::object());
+        } else if (json_req.method == "tools/list") {
+            auto tools = mcp_server->tools().ListTools();
+            nlohmann::json tools_json = nlohmann::json::array();
+            for (const auto& tool : tools) {
+                tools_json.push_back(tool.ToJson());
+            }
+            resp = muduo_http::mcp::McpProtocol::MakeResponse(
+                json_req.id, {{"tools", tools_json}});
+        } else if (json_req.method == "tools/call") {
+            std::string name = json_req.params.value("name", "");
+            nlohmann::json args = json_req.params.value("arguments", nlohmann::json::object());
+            auto result = mcp_server->tools().CallTool(name, args);
+            nlohmann::json content_json = nlohmann::json::array();
+            for (const auto& c : result.content) {
+                content_json.push_back(c);
+            }
+            resp = muduo_http::mcp::McpProtocol::MakeResponse(
+                json_req.id, {{"content", content_json}, {"isError", result.is_error}});
+        } else if (json_req.method == "notifications/initialized") {
+            resp = muduo_http::mcp::McpProtocol::MakeResponse(
+                json_req.id, nlohmann::json::object());
+        } else {
+            resp = muduo_http::mcp::McpProtocol::MakeError(
+                json_req.id, muduo_http::mcp::ErrorCode::kMethodNotFound,
+                "Method not found: " + json_req.method);
+        }
+
+        response.SetBody(resp);
+    });
 
     // Graceful shutdown
     int session_timeout = cfg.GetInt("session.timeout", 3600);
