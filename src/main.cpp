@@ -8,6 +8,7 @@
 #include "http/http_server.h"
 #include "http/https_server.h"
 #include "http/middleware.h"
+#include "http/stream_writer.h"
 
 int main() {
     muduo_http::HttpServer server(8080);
@@ -96,6 +97,43 @@ int main() {
             request.session->Clear();
         }
         response.SetBody("logged out\n");
+    });
+
+    // ----- SSE / Streaming demo -----
+    // GET /events - SSE stream (simulated AI token output)
+    server.routes().Get("/events", [](const muduo_http::HttpRequest& request,
+                                       muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            request.stream_conn, 200, "OK", "text/event-stream");
+        request.stream = writer;
+
+        // Send a series of SSE events
+        writer->WriteSSE("connected");
+        writer->WriteSSE("message", "Hello from SSE!");
+        writer->WriteSSE("update", "This is a streaming response.");
+        writer->WriteSSE("message", "Supports Chunked Transfer Encoding.");
+        writer->WriteSSE("done");
+
+        writer->End();
+    });
+
+    // GET /events/stream - slow simulated AI token stream
+    server.routes().Get("/events/stream", [](const muduo_http::HttpRequest& request,
+                                              muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            request.stream_conn, 200, "OK", "text/event-stream");
+        request.stream = writer;
+
+        writer->WriteSSE("stream", "Starting simulated AI output...\n");
+
+        const char* tokens[] = {"Hello", ", ", "this", " is", " a", " simulated", " AI", " response", ".", NULL};
+        for (int i = 0; tokens[i] != NULL; ++i) {
+            writer->WriteSSE("token", tokens[i]);
+            muduo::net::EventLoop* loop = nullptr; // Simulated delay - in real app use timer
+        }
+
+        writer->WriteSSE("done", "Stream complete.");
+        writer->End();
     });
 
     // ----- DB demo (pool status check) -----

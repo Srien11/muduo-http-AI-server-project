@@ -82,7 +82,10 @@ void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
                 break;
         }
     } else {
-        const auto& req = context.request();
+        auto& req = context.request();
+
+        // Expose connection for streaming support
+        req.stream_conn = conn;
 
         try {
             if (middlewares_.Run(req, response)) {
@@ -95,6 +98,11 @@ void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
             SetErrorResponse(response, 500, "Internal Server Error");
             std::cerr << "[http] unknown unhandled exception\n";
         }
+    }
+
+    // --- If handler activated streaming mode, skip normal response ---
+    if (context.request().stream) {
+        return;
     }
 
     // --- Connection management ---
