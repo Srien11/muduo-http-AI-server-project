@@ -111,6 +111,8 @@ AiChatResponse AiGateway::Chat(const AiChatRequest& request) {
 
     std::string response_body;
     std::string url = config_.api_base + "/chat/completions";
+    std::cout << "[ai] calling " << url << " with model=" << config_.model
+              << " key=" << config_.api_key.substr(0, 8) << "...\n";
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -130,6 +132,7 @@ AiChatResponse AiGateway::Chat(const AiChatRequest& request) {
     curl_slist_free_all(headers);
 
     if (res != CURLE_OK) {
+        std::cerr << "[ai] curl error: " << curl_easy_strerror(res) << " for url: " << url << '\n';
         response.error_message = curl_easy_strerror(res);
         curl_easy_cleanup(curl);
         return response;
@@ -138,6 +141,8 @@ AiChatResponse AiGateway::Chat(const AiChatRequest& request) {
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
+
+    std::cout << "[ai] response HTTP " << http_code << "\n";
 
     if (http_code != 200) {
         response.error_message = "API returned HTTP " + std::to_string(http_code) + ": " + response_body;

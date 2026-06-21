@@ -46,5 +46,17 @@
     "name": "",
     "role": "user",
     "tool_call_id": ""
+  },
+  {
+    "content": "你好",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
+  },
+  {
+    "content": "你好",
+    "name": "",
+    "role": "user",
+    "tool_call_id": ""
   }
 ]
