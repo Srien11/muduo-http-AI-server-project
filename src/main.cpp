@@ -4,18 +4,44 @@
 #include <string>
 
 #include "http/ai_gateway.h"
+#include "http/config_manager.h"
 #include "http/db_connection_pool.h"
+#include "http/graceful_shutdown.h"
 #include "http/http_response.h"
 #include "http/http_server.h"
 #include "http/https_server.h"
+#include "http/log_manager.h"
 #include "http/middleware.h"
 #include "http/multipart_parser.h"
 #include "http/static_file_handler.h"
 #include "http/stream_writer.h"
 
-int main() {
-    muduo_http::HttpServer server(8080);
-    server.set_thread_num(4);  // Prevent AI calls from blocking all connections
+int main(int argc, char* argv[]) {
+    // Load config
+    muduo_http::ConfigManager cfg;
+    std::string config_file = "server.conf";
+    if (argc > 1) config_file = argv[1];
+    cfg.Load(config_file);
+
+    // Setup logging
+    auto& log = muduo_http::LogManager::Instance();
+    std::string log_level = cfg.Get("log.level", "info");
+    if (log_level == "debug") log.SetLevel(muduo_http::LogLevel::kDebug);
+    else if (log_level == "warn") log.SetLevel(muduo_http::LogLevel::kWarn);
+    else if (log_level == "error") log.SetLevel(muduo_http::LogLevel::kError);
+    std::string log_file = cfg.Get("log.file", "");
+    if (!log_file.empty()) log.SetFile(log_file);
+    log.SetConsole(true);
+
+    LOG_INFO("server starting...");
+
+    // Create server from config
+    int port = cfg.GetInt("server.port", 8080);
+    int threads = cfg.GetInt("server.threads", 4);
+
+    muduo_http::HttpServer server(port);
+    server.set_thread_num(threads);
+    server.set_max_body_size(static_cast<size_t>(cfg.GetInt("server.max_body_size", 1048576)));
 
     // Session middleware is registered automatically by HttpServer
     server.Use(muduo_http::CreateLoggingMiddleware());
@@ -149,11 +175,10 @@ int main() {
 
     // ----- AI Gateway demo -----
     muduo_http::AiConfig ai_cfg;
-    // ai_cfg.api_key = std::getenv("OPENAI_API_KEY") ?: "";
-    ai_cfg.api_base = "https://api.openai.com/v1";
-    ai_cfg.model = "gpt-3.5-turbo";
-    ai_cfg.rate_limit_rps = 5;
-    ai_cfg.cache_enabled = true;
+    ai_cfg.api_base = cfg.Get("ai.api_base", "https://api.openai.com/v1");
+    ai_cfg.model = cfg.Get("ai.model", "gpt-3.5-turbo");
+    ai_cfg.rate_limit_rps = cfg.GetInt("ai.rate_limit_rps", 10);
+    ai_cfg.cache_enabled = cfg.GetBool("ai.cache_enabled", true);
 
     auto ai_gateway = std::make_shared<muduo_http::AiGateway>(ai_cfg);
 
@@ -266,7 +291,11 @@ int main() {
     });
 
     // ----- Start HTTPS server -----
-    muduo_http::HttpsServer https_server(8443, "certs/server.crt", "certs/server.key");
+    std::string https_cert = cfg.Get("https.cert_file", "certs/server.crt");
+    std::string https_key = cfg.Get("https.key_file", "certs/server.key");
+    int https_port = cfg.GetInt("https.port", 8443);
+
+    muduo_http::HttpsServer https_server(https_port, https_cert, https_key);
     https_server.Use(muduo_http::CreateLoggingMiddleware());
     https_server.Use(muduo_http::CreateCorsMiddleware());
 
@@ -281,8 +310,21 @@ int main() {
 
     https_server.Start();
 
-    std::cout << "Starting HTTP server on port 8080..." << std::endl;
-    std::cout << "HTTPS server on port 8443 (self-signed cert)" << std::endl;
+    // Graceful shutdown
+    int session_timeout = cfg.GetInt("session.timeout", 3600);
+    if (session_timeout > 0) {
+        server.set_session_timeout(session_timeout);
+    }
+
+    LOG_INFO("server ready on port " + std::to_string(port) +
+             " (https:" + std::to_string(https_port) +
+             ", threads:" + std::to_string(threads) + ")");
+
+    // Register cleanup and install signal handler
+    auto& shutdown = muduo_http::GracefulShutdown::Instance();
+    shutdown.Register([&https_server]() { https_server.Stop(); });
+    shutdown.Install(server.get_loop());
+
     server.Start();
     return 0;
 }

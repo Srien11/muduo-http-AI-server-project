@@ -11,9 +11,12 @@ link_directories(/usr/local/lib)
 add_executable(muduo_http_server
     src/main.cpp
     src/http/ai_gateway.cpp
+    src/http/config_manager.cpp
     src/http/db_connection_pool.cpp
+    src/http/graceful_shutdown.cpp
     src/http/http_context.cpp
     src/http/https_server.cpp
+    src/http/log_manager.cpp
     src/http/middleware.cpp
     src/http/multipart_parser.cpp
     src/http/rate_limiter.cpp

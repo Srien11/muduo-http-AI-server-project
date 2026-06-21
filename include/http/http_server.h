@@ -38,6 +38,9 @@ public:
     std::shared_ptr<SessionManager> session_manager() const { return session_manager_; }
     void set_session_timeout(int seconds);
 
+    // Access event loop (for graceful shutdown)
+    muduo::net::EventLoop* get_loop() { return &loop_; }
+
 private:
     void onConnection(const muduo::net::TcpConnectionPtr& conn);
     void onMessage(const muduo::net::TcpConnectionPtr& conn,
