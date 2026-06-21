@@ -46,6 +46,9 @@ public:
     // Configuration
     const AiConfig& config() const { return config_; }
     void UpdateConfig(const AiConfig& config) { config_ = config; }
+    void SetApiKey(const std::string& key) { config_.api_key = key; }
+    void SetModel(const std::string& model) { config_.model = model; }
+    void SetApiBase(const std::string& base) { config_.api_base = base; }
 
     // Rate limiter stats
     int rate_limit_remaining() const;

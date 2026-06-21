@@ -560,8 +560,8 @@ int main(int argc, char* argv[]) {
         response.SetBody(j.dump(2));
     });
 
-    server.routes().Post("/api/config", [](const muduo_http::HttpRequest& req,
-                                            muduo_http::HttpResponse& response) {
+    server.routes().Post("/api/config", [ai_gateway](const muduo_http::HttpRequest& req,
+                                                      muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
         try {
             auto body = nlohmann::json::parse(req.body);
@@ -588,6 +588,15 @@ int main(int argc, char* argv[]) {
 
             std::ofstream out("server.conf");
             out << content;
+
+            // Update running gateway
+            if (body.contains("api_key")) {
+                ai_gateway->SetApiKey(body["api_key"].get<std::string>());
+            }
+            if (body.contains("model")) {
+                ai_gateway->SetModel(body["model"].get<std::string>());
+            }
+
             nlohmann::json resp = {{"status", "saved"}};
             response.SetBody(resp.dump());
         } catch (const std::exception& e) {
@@ -760,9 +769,26 @@ int main(int argc, char* argv[]) {
         chat_agent, ai_gateway, "memory");
 
     // POST /chat/memory - chat with long-term memory persistence
-    server.routes().Post("/chat/memory", [memory_manager](const muduo_http::HttpRequest& req,
-                                                           muduo_http::HttpResponse& response) {
+    server.routes().Post("/chat/memory", [memory_manager, ai_gateway](const muduo_http::HttpRequest& req,
+                                                                       muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
+
+        // Reload config from server.conf (user may have updated via settings UI)
+        muduo_http::ConfigManager live_cfg;
+        live_cfg.Load("server.conf");
+        std::string api_key = live_cfg.Get("ai.api_key", "");
+        if (!api_key.empty()) {
+            ai_gateway->SetApiKey(api_key);
+            ai_gateway->SetModel(live_cfg.Get("ai.model", "gpt-3.5-turbo"));
+            std::string base = live_cfg.Get("ai.api_base", "https://api.openai.com/v1");
+            // Auto-add /v1 if missing
+            if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
+                if (base.back() == '/') base += "v1";
+                else base += "/v1";
+            }
+            ai_gateway->SetApiBase(base);
+        }
+
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string message = body.value("message", "");
