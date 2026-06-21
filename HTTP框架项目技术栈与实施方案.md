@@ -200,14 +200,30 @@
 
 ---
 
-## 6. 里程碑视图（简版）
+## 6. 里程碑视图
 
-- **M1（I1~I2）**：可对外提供稳定 HTTP 服务 ✅
-- **M2（I3~I4）**：具备可扩展路由与中间件体系 ✅
-- **M3（I5~I6）**：具备会话与数据持久化能力 ✅
-- **M4（I7~I8）**：具备 HTTPS 与完整交付文档 ✅
-- **M5（I9~I10）**：具备流式响应与 AI 推理网关
-- **M6（I11~I12）**：具备多模型路由与跨语言推理桥接
+### Phase 1：HTTP 生产化 ✅ 已完成
+| 里程碑 | 迭代 | 状态 |
+|--------|------|------|
+| M1 稳定 HTTP 服务 | I1 Muduo网络 + I2 协议健壮性 | ✅ |
+| M2 可扩展路由与中间件 | I3 动态路由 + I4 中间件链 | ✅ |
+| M3 会话与持久化 | I5 Session + I6 连接池 | ✅ |
+| M4 HTTPS 与文档 | I7 HTTPS + I8 文档收口 | ✅ |
+
+### Phase 2：AI 应用核心 ⏳ 进行中
+| 里程碑 | 迭代 | 状态 |
+|--------|------|------|
+| M5 AI 流式与推理网关 | I9 SSE + I10 推理网关 | ✅ |
+| M6 生产化补全 | I11 静态文件/上传 + I12 配置/日志/优雅退出 | ⏳ |
+| M7 工具调用引擎 | I13 Function Calling | ⏳ |
+| M8 多模型与 RAG | I14 多模型路由 + I15 RAG管道 | ⏳ |
+
+### Phase 3：高级能力 ⏳
+| 里程碑 | 迭代 | 状态 |
+|--------|------|------|
+| M9 长期记忆 | I16 对话持久化 | ⏳ |
+| M10 跨语言推理 | I17 Python进程桥 | ⏳ |
+| M11 标准协议与部署 | I18 MCP + I19 前端 + I20 Docker/CI | ⏳ |
 
 ---
 
@@ -233,81 +249,139 @@
 
 ---
 
-## 9. AI 能力扩展计划
+## 9. 整体架构设计（分层）
 
-### 设计思路
+### 9.1 架构总览
 
-不依赖本地 GPU 推理，聚焦**工程架构层面的 AI 接入能力**——将本框架打造为生产级推理接入层，核心价值在后端工程而非 AI 模型本身。
+```
+┌──────────────────────────────────────────────────┐
+│                  客户端层                         │
+│     浏览器 │ curl │ 第三方服务 │ 移动端            │
+└─────────────────────┬────────────────────────────┘
+                      │ HTTP/HTTPS
+┌─────────────────────▼────────────────────────────┐
+│  1. 网关层 (Gateway Layer)                       │
+│                                                  │
+│  HttpServer (Muduo EventLoop)                    │
+│  ├── StaticFileHandler   ← 静态文件服务          │
+│  ├── Router              ← 路由分发              │
+│  │   ├── ApiRouter       ← /api/* 接口路由       │
+│  │   └── PageRouter      ← 页面路由              │
+│  ├── MiddlewareChain                              │
+│  │   ├── Logging         ← 请求日志              │
+│  │   ├── CORS            ← 跨域                  │
+│  │   ├── RateLimit       ← IP级限流              │
+│  │   ├── Auth            ← 认证鉴权              │
+│  │   └── Session         ← 会话管理              │
+│  └── ErrorHandler        ← 统一错误页            │
+├─────────────────────┬────────────────────────────┤
+│  2. AI 引擎层 (AI Engine Layer)                  │
+│                                                  │
+│  AiGateway                                       │
+│  ├── ModelRouter       ← 多模型路由 + 熔断       │
+│  │   ├── OpenAI Provider                          │
+│  │   ├── Claude Provider                          │
+│  │   └── Local Provider                          │
+│  ├── ToolExecutor      ← Function Calling 引擎   │
+│  │   ├── Tool Registry  ← 工具注册中心           │
+│  │   └── Tool Loop      ← 调用-回填循环          │
+│  ├── RAGPipeline       ← 检索增强生成           │
+│  │   ├── DocumentLoader  ← 文档加载/切分         │
+│  │   ├── Embedder        ← 向量化 (调API)         │
+│  │   └── VectorStore     ← 向量检索              │
+│  └── MemoryManager     ← 记忆管理               │
+│      ├── ShortTerm       ← Session (已有)        │
+│      └── LongTerm        ← MySQL持久化           │
+├─────────────────────┬────────────────────────────┤
+│  3. 基础设施层 (Infrastructure Layer)            │
+│                                                  │
+│  ├── DbConnectionPool   ← MySQL连接池 (已有)     │
+│  ├── ConfigManager      ← 配置管理 (JSON/YAML)   │
+│  ├── LogManager         ← 结构化日志             │
+│  ├── CacheManager       ← 多级缓存 (内存+Redis)  │
+│  ├── PythonBridge       ← C++↔Python进程桥       │
+│  └── GracefulShutdown   ← 优雅退出               │
+├─────────────────────┬────────────────────────────┤
+│  4. 部署层 (Deployment Layer)                    │
+│                                                  │
+│  ├── Dockerfile + docker-compose                 │
+│  ├── GitHub Actions CI/CD                        │
+│  └── 前端静态页 (Vue/HTML)                       │
+└──────────────────────────────────────────────────┘
+```
 
-### 技术选型
-- **外部推理源**：远程 API（OpenAI 兼容接口 / 私有推理集群）
-- **C++ HTTP 请求**：libcurl（阻塞）/ muduo 内建 HTTP client（非阻塞回调）
-- **跨语言通信**：Unix Domain Socket / 共享内存（C++ ↔ Python 子进程）
-- **流式传输**：HTTP Chunked Transfer-Encoding + Server-Sent Events
+### 9.2 依赖方向（防止石山代码）
 
-### Iteration 9：流式响应（SSE + Chunked Transfer）
-**目标**：支持服务端流式输出，为 AI token 逐字推送打基础。
+**核心规则：上层可以调用下层，下层绝不能调用上层。**
 
-- 实现 `Transfer-Encoding: chunked` 响应编码
-- 实现 SSE（`text/event-stream`）格式，支持 `data:` 帧推送
-- 在 Muduo `TcpConnection` 上实现多次 write 不回关的连接保持
-- 示例：模拟 AI 逐 token 输出的 `/chat/stream` 端点
+```
+客户端 → 网关层 → AI引擎层 → 基础设施层
+              ↘        ↘
+              基础设施层  基础设施层
+```
 
-**验收**：
-- `curl -N http://127.0.0.1:8080/chat/stream` 可看到逐字输出效果
-- 无中间件短路时连接保持，结束后正常关闭
+**具体约束：**
+- `HttpServer` 不直接持有 AI 模块，只通过 Router 分发请求到 handler
+- `AiGateway` 内部是插件化的，`ModelRouter` / `ToolExecutor` / `RAGPipeline` 彼此独立
+- 基础设施层所有模块无业务逻辑，纯工具性质
+- 每个模块的头文件只暴露最少接口，实现细节全在 .cpp
 
-**建议提交**：
-- `feat(http): 实现chunked transfer与SSE流式响应`
+### 9.3 模块依赖矩阵
 
-### Iteration 10：推理网关（请求代理层）
-**目标**：将外部 AI API 封装成本框架的推理端点。
+| 模块 | 依赖谁 | 被谁依赖 |
+|------|--------|----------|
+| HttpServer | muduo, Router, MiddlewareChain | 无（最上层） |
+| Router | HttpRequest, HttpResponse | HttpServer |
+| MiddlewareChain | HttpRequest, HttpResponse | HttpServer |
+| Session | muduo::Timestamp | HttpServer, 中间件 |
+| AiGateway | libcurl, Config, Cache | 业务 handler |
+| ModelRouter | AiGateway (接口), Config | AiGateway |
+| ToolExecutor | ModelRouter, Tool 定义 | 业务 handler |
+| RAGPipeline | Embedder, VectorStore | 业务 handler |
+| PythonBridge | Unix Socket | 业务 handler |
+| DbConnectionPool | MySQL | 业务层 |
+| ConfigManager | JSON/YAML | 所有 |
+| CacheManager | std::unordered_map | AiGateway |
 
-- 接入 libcurl，封装 `AiGateway` 模块：接收请求 → 转发外部 API → 返回结果
-- 实现**连接池**：复用 HTTP 长连接到推理源
-- 实现**请求排队与并发控制**：令牌桶限制并发数，超出排队或拒绝（503）
-- 实现**结果缓存**：相同 prompt 在 TTL 内命中缓存不重复请求（LRU + Redis 双后端预留）
-- 示例：`POST /v1/chat/completions` 代理到 OpenAI 兼容 API
+### 9.4 目录结构规划
 
-**验收**：
-- 连续请求不建新连接（连接池复用）
-- 超限请求返回 503
-- 重复 prompt 返回缓存结果
+```
+include/http/           ← 全部对外头文件
+src/http/               ← 全部实现文件
+├── gateway/            ← 网关层 (HttpServer, Router, Middleware)
+├── ai/                 ← AI 引擎层 (AiGateway, ModelRouter, RAG)
+├── infra/              ← 基础设施层 (Config, Log, Cache, PythonBridge)
+└── deploy/             ← 部署配置
+```
 
-**建议提交**：
-- `feat(ai): 实现推理网关与请求代理`
+### 9.5 迭代路线图（优先序）
 
-### Iteration 11：多模型路由与降级
-**目标**：同一推理入口根据策略路由到不同后端。
+根据"先能用、再优化、再智能"的原则：
 
-- `Router` 层新增 AI 路由策略：按 prompt 关键词/长度/用户等级分发到不同推理源
-- 实现**超时控制**：每个后端独立超时配置，超时自动降级到备用后端
-- 实现**熔断器**：连续错误 N 次后暂时断开该后端，窗口期后恢复
-- 日志记录每次路由决策与延迟
+**Phase 1：生产化补全（HTTP 能上线）**
+| 迭代 | 内容 | 原因 |
+|------|------|------|
+| I11 | 静态文件服务 + Multipart 文件上传 | 没有这些就不能叫 Web 服务器 |
+| I12 | 配置文件 + 结构日志 + 优雅退出 | 没有这些就不能上线 |
 
-**验收**：
-- 相同请求可路由到不同后端
-- 主后端超时后静默切换到备用后端
-- 熔断触发后快速失败，窗口期后自动恢复
+**Phase 2：AI 核心（能用 AI）**
+| I13 | Function Calling 工具调度 | AI 调用 C++ 函数的核心引擎 |
+| I14 | 多模型路由 + 熔断降级 | 不绑死单一供应商 |
+| I15 | RAG 管道（文档→向量→检索） | 知识库问答 |
+| I16 | 长期记忆（对话持久化 MySQL） | 跨会话记忆 |
 
-**建议提交**：
-- `feat(ai): 实现多模型路由与熔断降级`
+**Phase 3：高级能力**
+| I17 | C++-Python 进程桥 | 绕开 HTTP，本地推理 |
+| I18 | MCP 协议兼容 | 标准工具协议 |
+| I19 | 前端管理页面 | 可视化使用 |
+| I20 | Docker + CI/CD 部署 | 让别人也能跑 |
 
-### Iteration 12：C++ ↔ Python 进程桥接
-**目标**：绕过 HTTP 转发，C++ 服务直接拉起 Python 推理进程，用进程间通信交换数据。
+### 9.6 架构保障措施
 
-- 封装 `PythonBridge` 模块：C++ 主进程 fork/spawn Python 子进程
-- 通信协议：Unix Domain Socket（本机，比 TCP loopback 快 30%+）/ 共享内存（大张量传输）
-- 序列化：Protocol Buffers 或自定义二进制协议
-- 子进程管理：心跳检测、崩溃自愈、优雅退出
-- 示例：Python 子进程运行一个小模型推理，C++ 端调用并获取结果
+1. **头文件隔离**：`include/http/gateway/` 中的头文件不引用 `include/http/ai/` 中的任何内容
+2. **接口而非实现**：模块间通过抽象接口（纯虚类）通信，通过依赖注入组装
+3. **独立编译验证**：每个模块至少一个单元测试，确保改动不破坏其他模块
+4. **不可逆依赖**：如果发现下层引用了上层的头文件，立即重构
 
-**验收**：
-- C++ 端调用 Python 推理返回正确结果
-- 子进程崩溃后自动重启
-- 延迟显著低于 HTTP 转发方案
-
-**建议提交**：
-- `feat(ai): 实现C++-Python进程桥接与共享内存通信`
 
 这是当前最关键的分水岭：从“模块演示”进入“真实服务”。
