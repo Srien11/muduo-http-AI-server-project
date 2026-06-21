@@ -127,6 +127,7 @@ AiChatResponse AiGateway::Chat(const AiChatRequest& request) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.timeout_seconds));
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "muduo_http_ai/0.1");
+    curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");  // Ignore proxy env vars
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
