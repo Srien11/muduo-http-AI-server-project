@@ -15,6 +15,7 @@ add_executable(muduo_http_server
     src/http/http_context.cpp
     src/http/https_server.cpp
     src/http/middleware.cpp
+    src/http/multipart_parser.cpp
     src/http/rate_limiter.cpp
     src/http/router.cpp
     src/http/session.cpp

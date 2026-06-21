@@ -9,6 +9,7 @@
 #include "http/http_server.h"
 #include "http/https_server.h"
 #include "http/middleware.h"
+#include "http/multipart_parser.h"
 #include "http/static_file_handler.h"
 #include "http/stream_writer.h"
 
@@ -206,6 +207,46 @@ int main() {
         chat_req.stream = true;
 
         ai_gateway->ChatStream(chat_req, *writer);
+    });
+
+    // ----- File upload demo -----
+    server.routes().Post("/upload", [](const muduo_http::HttpRequest& req,
+                                        muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+
+        auto ct_it = req.headers.find("Content-Type");
+        if (ct_it == req.headers.end()) {
+            response.SetBody("Missing Content-Type\n");
+            return;
+        }
+
+        std::string boundary = muduo_http::ExtractBoundary(ct_it->second);
+        if (boundary.empty()) {
+            response.SetBody("Invalid Content-Type (not multipart)\n");
+            return;
+        }
+
+        muduo_http::MultipartParser parser;
+        if (!parser.Parse(req.body, boundary)) {
+            response.SetBody("Failed to parse multipart data\n");
+            return;
+        }
+
+        std::string result;
+        result += "Parsed " + std::to_string(parser.fields().size()) + " parts:\n\n";
+
+        for (const auto& field : parser.fields()) {
+            result += "  field: " + field.name;
+            if (!field.filename.empty()) {
+                result += " (file: " + field.filename + ", " +
+                          std::to_string(field.data.size()) + " bytes)";
+            } else {
+                result += " = " + field.value;
+            }
+            result += "\n";
+        }
+
+        response.SetBody(result);
     });
 
     // ----- Static file service -----
