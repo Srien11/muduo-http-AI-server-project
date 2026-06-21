@@ -10,6 +10,7 @@
 #include "http/chat_agent.h"
 #include "http/config_manager.h"
 #include "http/model_router.h"
+#include "http/rag_pipeline.h"
 #include "http/db_connection_pool.h"
 #include "http/graceful_shutdown.h"
 #include "http/http_response.h"
@@ -518,6 +519,66 @@ int main(int argc, char* argv[]) {
         }
 
         response.SetBody(resp);
+    });
+
+    // ----- RAG Pipeline -----
+    auto embedder = std::make_shared<muduo_http::Embedder>(ai_gateway);
+    auto vector_store = std::make_shared<muduo_http::VectorStore>();
+    auto rag_pipeline = std::make_shared<muduo_http::RAGPipeline>(
+        embedder, vector_store, ai_gateway);
+
+    // Try to load persisted vectors
+    vector_store->Load("vectors.json");
+
+    // POST /rag/query - ask a question with RAG context
+    server.routes().Post("/rag/query", [rag_pipeline](const muduo_http::HttpRequest& req,
+                                                       muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string question = body.value("question", "");
+            if (question.empty()) {
+                response.SetBody(nlohmann::json({{"error", "question required"}}).dump());
+                return;
+            }
+            std::string answer = rag_pipeline->Query(question);
+            response.SetBody(nlohmann::json({{"answer", answer}}).dump());
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    // POST /rag/upload - add document to knowledge base
+    server.routes().Post("/rag/upload", [rag_pipeline, vector_store](
+        const muduo_http::HttpRequest& req, muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string text = body.value("text", "");
+            std::string source = body.value("source", "web");
+            if (text.empty()) {
+                response.SetBody(nlohmann::json({{"error", "text required"}}).dump());
+                return;
+            }
+            rag_pipeline->AddDocumentChunked(text, source);
+            vector_store->Save("vectors.json");
+            response.SetBody(nlohmann::json({{"status", "ok"},
+                                            {"chunks", vector_store->size()}}).dump());
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    // GET /rag/stats - knowledge base statistics
+    server.routes().Get("/rag/stats", [vector_store](const muduo_http::HttpRequest&,
+                                                      muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        response.SetBody(nlohmann::json({
+            {"chunks", vector_store->size()},
+            {"dimension", 1536}
+        }).dump());
     });
 
     // ----- AI Chat Agent (LLM + MCP tools loop) -----
