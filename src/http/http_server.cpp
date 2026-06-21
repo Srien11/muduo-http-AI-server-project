@@ -48,8 +48,11 @@ void HttpServer::Start() {
 
 void HttpServer::onConnection(const muduo::net::TcpConnectionPtr& conn) {
     if (conn->connected()) {
+        active_connections_++;
         std::cout << "[http] new connection: "
                   << conn->peerAddress().toIpPort() << '\n';
+    } else {
+        active_connections_--;
     }
 }
 
@@ -57,6 +60,7 @@ void HttpServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
                            muduo::net::Buffer* buf,
                            muduo::Timestamp) {
     const std::string raw_request(buf->retrieveAllAsString());
+    request_count_++;
     handleRequest(conn, raw_request);
 }
 
@@ -150,6 +154,19 @@ void HttpServer::Use(Middleware middleware) {
 
 void HttpServer::set_session_timeout(int seconds) {
     session_manager_ = std::make_shared<SessionManager>(seconds);
+}
+
+void HttpServer::TrackResponseTime(double ms) {
+    // Approximate: running average
+    double current = total_response_time_ms_.load();
+    double count = static_cast<double>(response_count_.load() + 1);
+    total_response_time_ms_.store(current + ms);
+}
+
+double HttpServer::avg_response_time_ms() const {
+    long long count = response_count_.load();
+    if (count == 0) return 0.0;
+    return total_response_time_ms_.load() / static_cast<double>(count);
 }
 
 } // namespace muduo_http

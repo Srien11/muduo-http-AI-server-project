@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
+#include <chrono>
 
 #include "muduo/net/TcpServer.h"
 #include "muduo/net/EventLoop.h"
@@ -41,6 +43,16 @@ public:
     // Access event loop (for graceful shutdown)
     muduo::net::EventLoop* get_loop() { return &loop_; }
 
+    // Stats
+    void IncrementRequests() { ++request_count_; }
+    void IncrementResponses() { ++response_count_; }
+    void TrackResponseTime(double ms);
+    long long request_count() const { return request_count_.load(); }
+    long long response_count() const { return response_count_.load(); }
+    int active_connections() const { return active_connections_.load(); }
+    double avg_response_time_ms() const;
+    std::time_t start_time() const { return start_time_; }
+
 private:
     void onConnection(const muduo::net::TcpConnectionPtr& conn);
     void onMessage(const muduo::net::TcpConnectionPtr& conn,
@@ -57,6 +69,13 @@ private:
     std::shared_ptr<SessionManager> session_manager_;
     size_t max_body_size_{1024 * 1024};
     int thread_num_{1};
+
+    // Stats tracking
+    std::atomic<long long> request_count_{0};
+    std::atomic<long long> response_count_{0};
+    std::atomic<int> active_connections_{0};
+    std::atomic<double> total_response_time_ms_{0};
+    std::time_t start_time_{std::time(nullptr)};
 };
 
 } // namespace muduo_http

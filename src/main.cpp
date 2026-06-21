@@ -1,4 +1,6 @@
 #include <cstdio>
+#include <ctime>
+#include <dirent.h>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -520,6 +522,99 @@ int main(int argc, char* argv[]) {
         }
 
         response.SetBody(resp);
+    });
+
+    // ----- API Stats -----
+    server.routes().Get("/api/stats", [&server](const muduo_http::HttpRequest&,
+                                                 muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        auto now = std::chrono::system_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+            now - std::chrono::system_clock::from_time_t(server.start_time())).count();
+
+        nlohmann::json j = {
+            {"uptime_seconds", uptime},
+            {"requests", server.request_count()},
+            {"responses", server.response_count()},
+            {"active_connections", server.active_connections()},
+            {"avg_response_ms", server.avg_response_time_ms()}
+        };
+        response.SetBody(j.dump(2));
+    });
+
+    // ----- API Config (settings) -----
+    server.routes().Get("/api/config", [](const muduo_http::HttpRequest&,
+                                           muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        std::ifstream conf_file("server.conf");
+        muduo_http::ConfigManager live_cfg;
+        if (conf_file.is_open()) {
+            live_cfg.LoadString(std::string((std::istreambuf_iterator<char>(conf_file)),
+                                             std::istreambuf_iterator<char>()));
+        }
+        nlohmann::json j = {
+            {"api_key", live_cfg.Get("ai.api_key", "")},
+            {"model", live_cfg.Get("ai.model", "gpt-3.5-turbo")},
+            {"api_base", live_cfg.Get("ai.api_base", "https://api.openai.com/v1")}
+        };
+        response.SetBody(j.dump(2));
+    });
+
+    server.routes().Post("/api/config", [](const muduo_http::HttpRequest& req,
+                                            muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::ifstream in("server.conf");
+            std::string content((std::istreambuf_iterator<char>(in)),
+                                 std::istreambuf_iterator<char>());
+            in.close();
+
+            if (body.contains("api_key")) {
+                std::string key = body["api_key"].get<std::string>();
+                auto pos = content.find("[ai]");
+                if (pos != std::string::npos) {
+                    auto key_pos = content.find("api_key", pos);
+                    auto next_sec = content.find("[", pos + 4);
+                    if (key_pos != std::string::npos && key_pos < next_sec) {
+                        auto eol = content.find('\n', key_pos);
+                        content.replace(key_pos, eol - key_pos, "api_key = " + key);
+                    } else {
+                        auto ai_eol = content.find('\n', pos) + 1;
+                        content.insert(ai_eol, "api_key = " + key + "\n");
+                    }
+                }
+            }
+
+            std::ofstream out("server.conf");
+            out << content;
+            nlohmann::json resp = {{"status", "saved"}};
+            response.SetBody(resp.dump());
+        } catch (const std::exception& e) {
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    // ----- Chat Sessions -----
+    server.routes().Get("/api/sessions", [](const muduo_http::HttpRequest&,
+                                             muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        nlohmann::json sessions = nlohmann::json::array();
+        // Scan memory/ directory for saved chat sessions
+        DIR* dir = opendir("memory");
+        if (dir) {
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                std::string name = entry->d_name;
+                if (name.size() > 5 && name.substr(name.size() - 5) == ".json" &&
+                    name.substr(0, 5) == "chat_") {
+                    std::string sid = name.substr(5, name.size() - 10);
+                    sessions.push_back({{"id", sid}});
+                }
+            }
+            closedir(dir);
+        }
+        response.SetBody(sessions.dump(2));
     });
 
     // ----- RAG Pipeline -----
