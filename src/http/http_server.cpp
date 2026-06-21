@@ -40,7 +40,8 @@ HttpServer::HttpServer(int port)
 
 void HttpServer::Start() {
     std::cout << "HTTP server starting on 0.0.0.0:"
-              << server_.ipPort() << '\n';
+              << server_.ipPort() << " (threads=" << thread_num_ << ")\n";
+    server_.setThreadNum(thread_num_);
     server_.start();
     loop_.loop();
 }

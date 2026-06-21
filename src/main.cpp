@@ -15,6 +15,7 @@
 
 int main() {
     muduo_http::HttpServer server(8080);
+    server.set_thread_num(4);  // Prevent AI calls from blocking all connections
 
     // Session middleware is registered automatically by HttpServer
     server.Use(muduo_http::CreateLoggingMiddleware());

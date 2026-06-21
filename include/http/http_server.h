@@ -29,6 +29,11 @@ public:
     void set_max_body_size(size_t bytes) { max_body_size_ = bytes; }
     size_t max_body_size() const { return max_body_size_; }
 
+    // Thread pool: spread connections across N threads to prevent blocking
+    // Default 1 (single-threaded). Set to e.g. 4 for AI workloads.
+    void set_thread_num(int n) { thread_num_ = n; }
+    int thread_num() const { return thread_num_; }
+
     // Session
     std::shared_ptr<SessionManager> session_manager() const { return session_manager_; }
     void set_session_timeout(int seconds);
@@ -47,7 +52,8 @@ private:
     Router router_;
     MiddlewareChain middlewares_;
     std::shared_ptr<SessionManager> session_manager_;
-    size_t max_body_size_{1024 * 1024};  // 1MB default
+    size_t max_body_size_{1024 * 1024};
+    int thread_num_{1};
 };
 
 } // namespace muduo_http
