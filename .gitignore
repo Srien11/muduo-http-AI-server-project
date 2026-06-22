@@ -16,3 +16,4 @@ server.conf
 *.log
 memory/
 vectors.json
+server.conf
