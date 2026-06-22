@@ -109,7 +109,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div style="text-align:center;padding:40px 20px;color:var(--text-muted);">
       <div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div>
       <div style="font-size:15px;font-weight:500;">开始新对话</div>
-      <div style="font-size:13px;margin-top:4px;">⚡ 闪电按钮 = 实时流式对话</div>
+      <div style="font-size:13px;margin-top:4px;">消息会自动保存</div>
     </div>
   </div>
   <div class="chat-in">
@@ -118,7 +118,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <button id="sendBtn" onclick="sendMsg()" style="width:42px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polyline points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
-      <button id="streamBtn" onclick="sendStreamMsg()" title="流式对话（实时显示思考过程）" style="width:36px;font-size:14px;background:var(--bg);border:1px solid var(--border);color:var(--text-muted);border-radius:var(--radius);cursor:pointer;">⚡</button>
     </div>
     <div class="hint" id="keyHint">未配置</div>
     <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;" id="statsBar"></div>
@@ -271,7 +270,7 @@ async function pickWorkspace() {
 
 function newChat() {
   curSession = 's_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-  document.getElementById('chatLog').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div><div style="font-size:15px;font-weight:500;">开始新对话</div><div style="font-size:13px;margin-top:4px;">⚡ 闪电按钮 = 实时流式对话</div></div>';
+  document.getElementById('chatLog').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div><div style="font-size:15px;font-weight:500;">开始新对话</div><div style="font-size:13px;margin-top:4px;">消息会自动保存</div></div>';
   document.getElementById('chatTitle').textContent = '新对话';
   document.querySelectorAll('.history-item').forEach(function(e){e.classList.remove('active');});
 }
@@ -311,52 +310,6 @@ async function sendMsg() {
 }
 
 // Streaming chat (real-time reasoning + content, no tools/memory)
-async function sendStreamMsg() {
-  var input = document.getElementById('chatInput');
-  var msg = input.value.trim();
-  if (!msg || isLoading) return;
-  input.value = '';
-  var log = document.getElementById('chatLog');
-  if (log.children.length===1 && log.children[0].querySelector('[style*="text-align:center"]')) log.innerHTML = '';
-  log.insertAdjacentHTML('beforeend','<div class="msg user"><div class="msg-av">U</div><div class="msg-bub">'+esc(msg)+'</div></div>');
-  log.scrollTop = log.scrollHeight;
-  isLoading = true;
-  document.getElementById('sendBtn').disabled = true;
-  var botDiv = document.createElement('div');
-  botDiv.className = 'msg bot';
-  botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub"><div class="rzn-body" style="display:block;">连接中...</div><div class="msg-content"></div></div>';
-  log.appendChild(botDiv); log.scrollTop = log.scrollHeight;
-  try {
-    var r = await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
-    var reader = r.body.getReader();
-    var decoder = new TextDecoder();
-    var buf = '';
-    var re = botDiv.querySelector('.rzn-body');
-    var ce = botDiv.querySelector('.msg-content');
-    re.textContent = '';
-    var prevScroll = 0;
-    while (true) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
-      buf += decoder.decode(chunk.value, {stream:true});
-      var idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        var line = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        if (!line) continue;
-        try {
-          var j = JSON.parse(line);
-          if (j.type === 'reasoning' && j.data) { re.textContent += j.data; }
-          else if (j.type === 'token' && j.data) { ce.textContent += j.data; }
-        } catch(e) {}
-      }
-      if (ce.textContent) log.scrollTop = log.scrollHeight;
-    }
-    if (!ce.textContent) ce.textContent = '(完成)';
-  } catch(e) { botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">请求失败</div>'; }
-  isLoading = false; document.getElementById('sendBtn').disabled = false; log.scrollTop = log.scrollHeight;
-}
-
 async function delSession(id) {
   try { await fetch('/chat/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true,session_id:id})}); if(curSession===id)newChat(); loadSessions(); } catch(e){}
 }
