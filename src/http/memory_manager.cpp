@@ -50,16 +50,32 @@ void MemoryManager::TrimContext() {
     auto& history = agent_->history();
     if (static_cast<int>(history.size()) <= trim_threshold_) return;
 
-    // Count messages and trim oldest first
-    // Keep the system prompt (if any) and the most recent messages
     int excess = static_cast<int>(history.size()) - max_context_messages_;
     if (excess <= 0) return;
 
-    // Remove oldest messages, keep the most recent
-    history.erase(history.begin(), history.begin() + excess);
+    // Find a safe cut point: don't orphan "tool" messages without
+    // their preceding "assistant" message with tool_calls
+    int cut = excess;
+    for (int i = excess; i < static_cast<int>(history.size()); i++) {
+        if (history[i].role == "tool") {
+            // This tool message would lose its predecessor;
+            // extend the cut backwards to include the matching
+            // assistant(tool_calls) message
+            for (int j = i - 1; j >= 0; j--) {
+                if (history[j].role == "assistant" && !history[j].tool_calls.is_null()) {
+                    if (j < cut) cut = j;
+                    break;
+                }
+                if (history[j].role != "tool") break; // not part of a tool chain
+            }
+        }
+    }
 
-    std::cout << "[memory] trimmed " << excess << " old messages, "
-              << history.size() << " remaining\n";
+    if (cut > 0) {
+        history.erase(history.begin(), history.begin() + cut);
+        std::cout << "[memory] trimmed " << cut << " old messages, "
+                  << history.size() << " remaining\n";
+    }
 }
 
 std::string MemoryManager::HistoryPath(const std::string& session_id) const {
