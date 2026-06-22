@@ -1,7 +1,6 @@
-version: "3.9"
 services:
   zhimo:
-    build: .
+    image: ghcr.io/srien11/muduo-http-ai-server-project:latest
     ports:
       - "8080:8080"
     volumes:
