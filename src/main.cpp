@@ -408,18 +408,18 @@ int main(int argc, char* argv[]) {
     // read_file - read file contents
     mcp_server->RegisterTool(
         {"read_file", "Read the contents of a file",
-         {{"path", "Absolute path to the file", "string", true}}},
+         {{"path", "Absolute path to the file (supports /linux/path or D:/windows/path)", "string", true}}},
         [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
             auto result = muduo_http::mcp::ToolResult{};
             std::string path = args.value("path", "");
-            // Security: restrict to home directory
-            if (path.find("..") != std::string::npos || path[0] != '/') {
+            // Security: block ".." path traversal
+            if (path.find("..") != std::string::npos) {
                 result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path"));
+                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path (\"..\" not allowed)"));
                 result.is_error = true;
                 return result;
             }
-            std::ifstream file(path);
+            std::ifstream file(path, std::ios::binary);
             if (!file.is_open()) {
                 result.content.push_back(
                     muduo_http::mcp::McpProtocol::TextContent("Error: cannot open file"));
@@ -428,8 +428,25 @@ int main(int argc, char* argv[]) {
             }
             std::ostringstream buf;
             buf << file.rdbuf();
+            std::string content = buf.str();
+
+            // Check for binary content (null bytes or non-UTF-8)
+            bool is_binary = false;
+            for (size_t i = 0; i < content.size() && i < 4096; i++) {
+                unsigned char c = content[i];
+                if (c == 0) { is_binary = true; break; }
+            }
+            if (is_binary) {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent(
+                        "Error: file appears to be binary (" + std::to_string(content.size()) + " bytes). "
+                        "Only text files can be displayed."));
+                result.is_error = true;
+                return result;
+            }
+
             result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(buf.str()));
+                muduo_http::mcp::McpProtocol::TextContent(content));
             return result;
         });
 

@@ -53,6 +53,7 @@ AiChatResponse ChatAgent::Process(const std::string& user_message) {
             AiChatMessage assistant_msg;
             assistant_msg.role = "assistant";
             assistant_msg.content = response.content;
+            assistant_msg.reasoning_content = response.reasoning_content;
             assistant_msg.tool_calls = tc_json;
             history_.push_back(assistant_msg);
 
@@ -75,11 +76,6 @@ AiChatResponse ChatAgent::Process(const std::string& user_message) {
 
             tool_calls++;
 
-            // If LLM also returned text content alongside tool calls, use it
-            if (!response.content.empty() && !response.has_tool_calls()) {
-                final_response = response;
-                break;
-            }
             // Otherwise loop again to let LLM process tool results
         } else {
             // LLM returned a natural language response
@@ -109,7 +105,8 @@ bool ChatAgent::SaveHistory(const std::string& filepath) const {
                 {"role", msg.role},
                 {"content", msg.content},
                 {"tool_call_id", msg.tool_call_id},
-                {"name", msg.name}
+                {"name", msg.name},
+                {"reasoning_content", msg.reasoning_content}
             };
             if (!msg.tool_calls.is_null()) {
                 entry["tool_calls"] = msg.tool_calls;
@@ -135,6 +132,7 @@ bool ChatAgent::LoadHistory(const std::string& filepath) {
             msg.content = item.value("content", "");
             msg.tool_call_id = item.value("tool_call_id", "");
             msg.name = item.value("name", "");
+            msg.reasoning_content = item.value("reasoning_content", "");
             if (item.contains("tool_calls")) { msg.tool_calls = item["tool_calls"]; }
             history_.push_back(msg);
         }

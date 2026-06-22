@@ -236,6 +236,12 @@ std::string AiGateway::BuildRequestBody(const AiChatRequest& request) {
             j["tool_calls"] = msg.tool_calls;
         }
 
+        // Reasoning content (DeepSeek thinking mode — must be passed back verbatim,
+        // even when empty, otherwise API returns 400 on subsequent tool-call turns)
+        if (msg.role == "assistant") {
+            j["reasoning_content"] = msg.reasoning_content;
+        }
+
         msgs.push_back(j);
     }
     body["messages"] = msgs;
@@ -279,6 +285,11 @@ AiChatResponse AiGateway::ParseResponse(const std::string& body) {
         // Extract text content
         if (message.contains("content") && !message["content"].is_null()) {
             response.content = message["content"];
+        }
+
+        // Extract reasoning_content (DeepSeek thinking mode)
+        if (message.contains("reasoning_content") && !message["reasoning_content"].is_null()) {
+            response.reasoning_content = message["reasoning_content"];
         }
 
         // Extract tool calls

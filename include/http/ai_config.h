@@ -36,6 +36,7 @@ struct AiChatMessage {
     std::string content;
     std::string tool_call_id;    // for tool responses
     std::string name;           // for tool responses
+    std::string reasoning_content;  // DeepSeek thinking mode reasoning (must be passed back)
     nlohmann::json tool_calls;   // for assistant messages with tool_calls
 };
 
@@ -51,6 +52,7 @@ struct AiChatRequest {
 struct AiChatResponse {
     bool success = false;
     std::string content;
+    std::string reasoning_content;  // DeepSeek thinking mode reasoning (must be passed back)
     std::string error_message;
     int prompt_tokens = 0;
     int completion_tokens = 0;
