@@ -504,6 +504,114 @@ int main(int argc, char* argv[]) {
             return result;
         });
 
+    // search_web - search the internet
+    mcp_server->RegisterTool(
+        {"search_web", "在互联网上搜索信息。当用户问到实时信息、新闻、你不知道的内容时使用。返回搜索结果标题、摘要和链接。",
+         {{"query", "搜索关键词", "string", true},
+          {"count", "返回结果数（默认5，最多10）", "number", false}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string query = args.value("query", "");
+            int count = args.value("count", 5);
+            if (count < 1) count = 1;
+            if (count > 10) count = 10;
+
+            // Use DuckDuckGo lite HTML search (no API key required)
+            // Escape query for shell
+            std::string safe_query;
+            for (char c : query) {
+                if (c == '\'') safe_query += "'\\''";
+                else safe_query += c;
+            }
+
+            std::string cmd = "curl -sL -A 'Mozilla/5.0' --max-time 15 "
+                "'https://lite.duckduckgo.com/lite/?q=" + safe_query + "' 2>&1";
+
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：搜索请求失败"));
+                result.is_error = true; return result;
+            }
+
+            std::string html;
+            char buf[8192];
+            while (fgets(buf, sizeof(buf), pipe)) html += buf;
+            pclose(pipe);
+
+            if (html.empty()) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("搜索无结果"));
+                return result;
+            }
+
+            // Parse HTML to extract search results
+            // DuckDuckGo lite format: <a href="url" class="result-link">title</a>
+            std::string output;
+            int found = 0;
+            size_t pos = 0;
+            while (found < count) {
+                // Find result link
+                auto link_start = html.find("<a ", pos);
+                if (link_start == std::string::npos) break;
+
+                auto href_pos = html.find("href=\"", link_start);
+                if (href_pos == std::string::npos || href_pos > link_start + 100) { pos = link_start + 1; continue; }
+                href_pos += 6;
+                auto href_end = html.find("\"", href_pos);
+                if (href_end == std::string::npos) break;
+                std::string url = html.substr(href_pos, href_end - href_pos);
+
+                // Skip ads and irrelevant links
+                if (url.find("//") == std::string::npos || url.find("duckduckgo") != std::string::npos) {
+                    pos = href_end; continue;
+                }
+
+                // Find title between <a ...> and </a>
+                auto title_start = html.find(">", href_end) + 1;
+                auto title_end = html.find("</a>", title_start);
+                if (title_end == std::string::npos) break;
+                std::string title = html.substr(title_start, title_end - title_start);
+
+                // Find snippet after the link
+                auto snippet_pos = html.find("class=\"result-snippet\"", title_end);
+                std::string snippet;
+                if (snippet_pos != std::string::npos && snippet_pos < title_end + 1000) {
+                    auto sn_start = html.find(">", snippet_pos) + 1;
+                    auto sn_end = html.find("</", sn_start);
+                    if (sn_end != std::string::npos)
+                        snippet = html.substr(sn_start, sn_end - sn_start);
+                }
+
+                // Decode HTML entities
+                auto decode = [](std::string s) -> std::string {
+                    auto replace = [](std::string& str, const std::string& from, const std::string& to) {
+                        size_t p = 0;
+                        while ((p = str.find(from, p)) != std::string::npos) {
+                            str.replace(p, from.length(), to);
+                            p += to.length();
+                        }
+                    };
+                    replace(s, "&amp;", "&");
+                    replace(s, "&lt;", "<");
+                    replace(s, "&gt;", ">");
+                    replace(s, "&quot;", "\"");
+                    replace(s, "&#x27;", "'");
+                    return s;
+                };
+
+                found++;
+                output += std::to_string(found) + ". " + decode(title) + "\n";
+                output += "   " + url + "\n";
+                if (!snippet.empty()) output += "   " + decode(snippet) + "\n";
+                output += "\n";
+
+                pos = title_end + 4;
+            }
+
+            if (output.empty()) output = "(未找到结果)";
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(output));
+            return result;
+        });
+
     // search_files - search for text in files
     mcp_server->RegisterTool(
         {"search_files", "在文件或目录中搜索文本内容。支持 glob 模式匹配文件名（如 *.cpp, *.py, *）。",
@@ -686,7 +794,8 @@ int main(int argc, char* argv[]) {
             {"model", live_cfg.Get("ai.model", "gpt-3.5-turbo")},
             {"api_base", live_cfg.Get("ai.api_base", "https://api.openai.com/v1")},
             {"rate_limit_rps", live_cfg.GetInt("ai.rate_limit_rps", 10)},
-            {"cache_enabled", live_cfg.GetBool("ai.cache_enabled", true)}
+            {"cache_enabled", live_cfg.GetBool("ai.cache_enabled", true)},
+            {"workspace", live_cfg.Get("ai.workspace", ".")}
         };
         response.SetBody(j.dump(2));
     });
@@ -947,9 +1056,11 @@ int main(int argc, char* argv[]) {
 
     // Create chat agent — system prompt reads model name from config
     std::string model_name = cfg.Get("ai.model", "deepseek-v4-flash");
+    std::string workspace_path = cfg.Get("ai.workspace", ".");
     std::string system_prompt =
         "你是知墨（ZhiMo），一个自建的 AI 助手。"
-        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n\n"
+        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n"
+        "当前工作目录：" + workspace_path + "。默认在此目录下操作文件。\n\n"
 
         "== 工具使用规则 ==\n"
         "你有以下工具可用，在处理用户请求时必须优先使用工具而非仅用文本回答：\n\n"
@@ -967,8 +1078,12 @@ int main(int argc, char* argv[]) {
 
         "【命令执行】\n"
         "- execute_command(command, timeout_seconds): 执行 shell 命令。"
-        "可用于编译、运行脚本、安装包、git 操作、启动服务等。"
-        "执行可能产生副作用的命令前要先告知用户。\n\n"
+        "可用于编译、运行脚本、安装包、git 操作、启动服务等。\n\n"
+
+        "【网络搜索】\n"
+        "- search_web(query, count): 在互联网上搜索信息。"
+        "当用户问到新闻、实时数据、你不知道的内容时使用。"
+        "返回搜索结果的标题、链接和摘要。\n\n"
 
         "【系统信息】\n"
         "- system_info(): 查看操作系统、CPU、内存、磁盘等信息。\n\n"
@@ -1051,6 +1166,32 @@ int main(int argc, char* argv[]) {
             j.push_back({{"name", name}, {"api_base", cfg.first}, {"model", cfg.second}});
         }
         response.SetBody(j.dump(2));
+    });
+
+    // POST /chat/stream - streaming chat (NDJSON, real-time reasoning + content)
+    server.routes().Post("/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
+                                                       muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            req.stream_conn, 200, "OK", "text/plain; charset=utf-8");
+        req.stream = writer;
+
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string message = body.value("message", "");
+            if (message.empty()) {
+                writer->WriteChunk(R"({"type":"error","data":"消息不能为空"})" "\n");
+                writer->End(); return;
+            }
+
+            muduo_http::AiChatRequest chat_req;
+            chat_req.messages.push_back({"user", message});
+            chat_req.stream = true;
+            ai_gateway->ChatStream(chat_req, *writer);
+        } catch (const std::exception& e) {
+            nlohmann::json err = {{"type", "error"}, {"data", std::string("parse error: ") + e.what()}};
+            writer->WriteChunk(err.dump() + "\n");
+            writer->End();
+        }
     });
 
     // POST /chat/memory - chat with long-term memory + provider switching
