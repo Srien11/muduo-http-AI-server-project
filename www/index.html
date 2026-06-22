@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>知墨 · 对话</title>
+<title>知墨</title>
 <style>
 :root {
   --bg: #f7f8fa;
@@ -58,6 +58,11 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
 .msg-bub { padding: 10px 14px; border-radius: 10px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .msg.bot .msg-bub { background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow); }
 .msg.user .msg-bub { background: var(--accent); color: #fff; }
+.rzn-toggle { font-size: 11px; color: var(--text-muted); cursor: pointer; margin-top: 6px; user-select: none; }
+.rzn-toggle:hover { color: var(--accent); }
+.rzn-body { font-size: 12px; color: var(--text-muted); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 4px; display: none; white-space: pre-wrap; line-height: 1.5; }
+.rzn-body.open { display: block; }
+.msg-foot { font-size: 10px; color: var(--text-muted); margin-top: 4px; opacity: .7; }
 .chat-in { padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg); }
 .chat-in .row { display: flex; gap: 8px; max-width: 900px; margin: 0 auto; }
 .chat-in input { flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 16px; font-size: 14px; color: var(--text); outline: none; box-shadow: var(--shadow); }
@@ -67,12 +72,12 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
 .chat-in .hint { font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 8px; }
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 100; align-items: center; justify-content: center; }
 .modal-overlay.show { display: flex; }
-.modal { background: #fff; border-radius: 14px; width: 440px; max-width: 90vw; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.12); }
+.modal { background: #fff; border-radius: 14px; width: 460px; max-width: 90vw; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.12); }
 .modal h2 { font-size: 17px; font-weight: 700; margin-bottom: 20px; }
 .modal .field { margin-bottom: 16px; }
 .modal label { display: block; font-size: 12px; font-weight: 600; color: var(--text-soft); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .04em; }
-.modal input { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; font-size: 13px; color: var(--text); outline: none; }
-.modal input:focus { border-color: var(--accent); }
+.modal input, .modal select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; font-size: 13px; color: var(--text); outline: none; }
+.modal input:focus, .modal select:focus { border-color: var(--accent); }
 .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
 .modal .actions button { padding: 8px 18px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; cursor: pointer; border: none; }
 .modal .actions .pri { background: var(--accent); color: #fff; }
@@ -85,34 +90,30 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
 </style>
 </head>
 <body>
-
 <aside class="sidebar" id="side">
   <div class="sidebar-head">
     <h1>知墨</h1>
-    <button onclick="newChat()" title="新对话">+</button>
+    <button onclick="newChat()">+</button>
   </div>
-  <div class="sidebar-search"><input id="searchHist" placeholder="搜索对话..." oninput="filterHistory()"></div>
-  <div class="history-list" id="histList">
-    <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">暂无历史对话</div>
-  </div>
+  <div class="sidebar-search"><input id="searchHist" placeholder="搜索..." oninput="filterHistory()"></div>
+  <div class="history-list" id="histList"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">暂无历史对话</div></div>
   <div class="sidebar-foot">
     <div class="status"><div class="dot"></div><span id="connStatus">已连接</span></div>
-    <button class="setting-btn" onclick="openSettings()" title="设置">
+    <button class="setting-btn" onclick="openSettings()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
     </button>
   </div>
 </aside>
-
 <div class="main">
   <div class="chat-header">
     <span class="title" id="chatTitle">新对话</span>
-    <span class="model-badge" id="modelBadge">gpt-3.5-turbo</span>
+    <span class="model-badge" id="modelBadge">-</span>
   </div>
   <div class="chat-msgs" id="chatLog">
     <div style="text-align:center;padding:40px 20px;color:var(--text-muted);">
       <div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div>
       <div style="font-size:15px;font-weight:500;">开始新对话</div>
-      <div style="font-size:13px;margin-top:4px;">消息会自动保存，下次可以继续</div>
+      <div style="font-size:13px;margin-top:4px;">消息会自动保存</div>
     </div>
   </div>
   <div class="chat-in">
@@ -122,7 +123,7 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polyline points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
-    <div class="hint" id="keyHint">未配置 API Key</div>
+    <div class="hint" id="keyHint">未配置</div>
     <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;" id="statsBar"></div>
   </div>
 </div>
@@ -131,16 +132,22 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
   <div class="modal">
     <h2>设置</h2>
     <div class="field">
-      <label>API Key</label>
-      <input id="sApiKey" type="password" placeholder="sk-..." onchange="saveSettings()">
-    </div>
-    <div class="field">
       <label>模型</label>
-      <input id="sModel" placeholder="gpt-3.5-turbo" onchange="saveSettings()">
+      <select id="sModel" onchange="saveSettings()">
+        <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+        <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+        <option value="deepseek-chat">deepseek-chat</option>
+        <option value="gpt-4o">gpt-4o</option>
+        <option value="gpt-4o-mini">gpt-4o-mini</option>
+      </select>
     </div>
     <div class="field">
       <label>API 地址</label>
-      <input id="sApiBase" placeholder="https://api.openai.com/v1" onchange="saveSettings()">
+      <input id="sApiBase" placeholder="https://api.deepseek.com/v1" onchange="saveSettings()">
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <input id="sApiKey" type="password" placeholder="sk-..." onchange="saveSettings()">
     </div>
     <div class="field">
       <label>限流 (次/秒)</label>
@@ -160,10 +167,10 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
       <div>知识库: <span id="statRag">-</span></div>
     </div>
     <div class="actions">
-      <button class="sec" onclick="closeSettings()">取消</button>
+      <button class="sec" onclick="closeSettings()">关闭</button>
       <button class="pri" onclick="saveSettings()">保存</button>
     </div>
-    <div class="tip">设置保存在 server.conf 中</div>
+    <div class="tip">设置保存到 server.conf</div>
   </div>
 </div>
 
@@ -173,11 +180,10 @@ let isLoading = false;
 
 async function loadConfig() {
   try {
-    const r = await fetch('/api/config');
-    const d = await r.json();
+    const d = await (await fetch('/api/config')).json();
     document.getElementById('sApiKey').value = d.api_key || '';
-    document.getElementById('sModel').value = d.model || 'gpt-3.5-turbo';
-    document.getElementById('sApiBase').value = d.api_base || '';
+    document.getElementById('sModel').value = d.model || 'deepseek-v4-flash';
+    document.getElementById('sApiBase').value = d.api_base || 'https://api.deepseek.com/v1';
     document.getElementById('sRateLimit').value = d.rate_limit_rps || 10;
     document.getElementById('sCache').checked = d.cache_enabled !== false;
     document.getElementById('modelBadge').textContent = d.model || '?';
@@ -187,40 +193,30 @@ async function loadConfig() {
 
 async function loadStats() {
   try {
-    const [sr, rr] = await Promise.all([
-      fetch('/api/stats'),
-      fetch('/rag/stats').catch(() => null)
-    ]);
-    const s = await sr.json();
-    document.getElementById('statUptime').textContent = (s.uptime_seconds || 0) + 's';
-    document.getElementById('statReqs').textContent = s.requests || 0;
-    document.getElementById('statConns').textContent = s.active_connections || 0;
-    document.getElementById('statResp').textContent = (s.avg_response_ms || 0).toFixed(1) + 'ms';
-    if (rr && rr.ok) {
-      const r = await rr.json();
-      document.getElementById('statRag').textContent = (r.chunks || 0) + ' 块';
-    }
+    const s = await (await fetch('/api/stats')).json();
+    document.getElementById('statUptime').textContent = (s.uptime_seconds||0)+'s';
+    document.getElementById('statReqs').textContent = s.requests||0;
+    document.getElementById('statConns').textContent = s.active_connections||0;
+    document.getElementById('statResp').textContent = (s.avg_response_ms||0).toFixed(1)+'ms';
+    try {
+      const r = await (await fetch('/rag/stats')).json();
+      document.getElementById('statRag').textContent = (r.chunks||0)+' 块';
+    } catch(e) {}
     const bar = document.getElementById('statsBar');
-    if (s.uptime_seconds) {
-      bar.textContent = '运行 ' + Math.floor(s.uptime_seconds/60) + 'm · ' + (s.requests||0) + ' 请求 · ' + (s.active_connections||0) + ' 连接';
-    }
+    if (s.uptime_seconds) bar.textContent = Math.floor(s.uptime_seconds/60)+'m '+(s.requests||0)+' 请求 '+(s.active_connections||0)+' 连接';
   } catch(e) {}
 }
 
 async function loadSessions() {
   try {
-    const r = await fetch('/api/sessions');
-    const list = await r.json();
+    const list = await (await fetch('/api/sessions')).json();
     const el = document.getElementById('histList');
-    if (!list.length) {
-      el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">暂无历史对话</div>';
-      return;
-    }
+    if (!list.length) { el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">暂无历史对话</div>'; return; }
     el.innerHTML = '';
     list.forEach(s => {
       const d = document.createElement('div');
       d.className = 'history-item' + (curSession === s.id ? ' active' : '');
-      d.innerHTML = '<span class="preview">' + esc(s.preview || '会话' + s.id.slice(0,6)) + '</span><button class="del" onclick="event.stopPropagation();delSession(\''+s.id+'\')">x</button>';
+      d.innerHTML = '<span class="preview">' + esc(s.preview || s.id.slice(0,10)) + '</span><button class="del" onclick="event.stopPropagation();delSession(\''+s.id+'\')">x</button>';
       d.onclick = () => loadSession(s.id);
       el.appendChild(d);
     });
@@ -234,72 +230,71 @@ async function saveSettings() {
   const rps = parseInt(document.getElementById('sRateLimit').value) || 10;
   const cache = document.getElementById('sCache').checked;
   try {
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({api_key: key, model: model, api_base: base, rate_limit_rps: rps, cache_enabled: cache})
-    });
-    document.getElementById('modelBadge').textContent = model || '?';
+    await fetch('/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key,model:model,api_base:base,rate_limit_rps:rps,cache_enabled:cache})});
+    document.getElementById('modelBadge').textContent = model||'?';
     document.getElementById('keyHint').textContent = key ? '已配置' : '未配置 API Key';
-    loadConfig();
-    closeSettings();
-  } catch(e) { alert('保存失败: '+e.message); }
+    loadConfig(); closeSettings();
+  } catch(e) { alert('保存失败'); }
 }
 
-function openSettings() { document.getElementById('settingsModal').classList.add('show'); }
+function openSettings() { document.getElementById('settingsModal').classList.add('show'); loadStats(); }
 function closeSettings() { document.getElementById('settingsModal').classList.remove('show'); }
 
+function toggleRzn(el) {
+  var body = el.nextElementSibling;
+  if (body && body.className.indexOf('rzn-body')>=0) {
+    body.classList.toggle('open');
+    el.textContent = body.classList.contains('open') ? '▼ 思考过程' : '▶ 思考过程';
+  }
+}
+
 function newChat() {
-  curSession = 's_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
-  document.getElementById('chatLog').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div><div style="font-size:15px;font-weight:500;">开始新对话</div><div style="font-size:13px;margin-top:4px;">消息会自动保存，下次可以继续</div></div>';
+  curSession = 's_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  document.getElementById('chatLog').innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);"><div style="font-size:40px;margin-bottom:12px;opacity:.3">...</div><div style="font-size:15px;font-weight:500;">开始新对话</div><div style="font-size:13px;margin-top:4px;">消息会自动保存</div></div>';
   document.getElementById('chatTitle').textContent = '新对话';
-  document.querySelectorAll('.history-item').forEach(e => e.classList.remove('active'));
+  document.querySelectorAll('.history-item').forEach(function(e){e.classList.remove('active');});
 }
 
 async function sendMsg() {
-  const input = document.getElementById('chatInput');
-  const msg = input.value.trim();
+  var input = document.getElementById('chatInput');
+  var msg = input.value.trim();
   if (!msg || isLoading) return;
   input.value = '';
-
-  const log = document.getElementById('chatLog');
-  if (log.children.length === 1 && log.children[0].querySelector('[style*="text-align:center"]')) {
-    log.innerHTML = '';
-  }
-
-  log.insertAdjacentHTML('beforeend', '<div class="msg user"><div class="msg-av">U</div><div class="msg-bub">'+esc(msg)+'</div></div>');
+  var log = document.getElementById('chatLog');
+  if (log.children.length===1 && log.children[0].querySelector('[style*="text-align:center"]')) log.innerHTML = '';
+  log.insertAdjacentHTML('beforeend','<div class="msg user"><div class="msg-av">U</div><div class="msg-bub">'+esc(msg)+'</div></div>');
   log.scrollTop = log.scrollHeight;
-
   isLoading = true;
   document.getElementById('sendBtn').disabled = true;
-
-  const botDiv = document.createElement('div');
+  var botDiv = document.createElement('div');
   botDiv.className = 'msg bot';
+  botDiv.id = 'lastBotMsg';
   botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">思考中...</div>';
   log.appendChild(botDiv);
   log.scrollTop = log.scrollHeight;
-
   try {
-    const r = await fetch('/chat/memory', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({message: msg, session_id: curSession})
-    });
-    const d = await r.json();
-    const botBubbles = log.querySelectorAll('.msg.bot .msg-bub');
-    const tb = botBubbles[botBubbles.length - 1];
+    var d = await (await fetch('/chat/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:curSession})})).json();
+    var lastBot = document.getElementById('lastBotMsg');
+    if (!lastBot) return;
     if (d.response) {
-      tb.textContent = d.response;
+      var html = '<div class="msg-av">M</div><div class="msg-bub">'+esc(d.response);
+      if (d.reasoning) html += '<div class="rzn-toggle" onclick="toggleRzn(this)">▶ 思考过程</div><div class="rzn-body">'+esc(d.reasoning)+'</div>';
+      if (d.usage || d.elapsed_ms) {
+        html += '<div class="msg-foot">';
+        if (d.usage) html += '输入:'+(d.usage.prompt_tokens||0)+' 输出:'+(d.usage.completion_tokens||0);
+        if (d.elapsed_ms) html += ' · '+d.elapsed_ms+'ms';
+        html += '</div>';
+      }
+      html += '</div>';
+      lastBot.innerHTML = html;
       loadSessions();
     } else if (d.error) {
-      tb.textContent = '错误: ' + d.error;
+      lastBot.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">错误: '+esc(d.error)+'</div>';
     }
   } catch(e) {
-    const botBubbles = log.querySelectorAll('.msg.bot .msg-bub');
-    const tb = botBubbles[botBubbles.length - 1];
-    if (tb) tb.textContent = '请求失败: ' + e.message;
+    var lastBot = document.getElementById('lastBotMsg');
+    if (lastBot) lastBot.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">请求失败: '+esc(e.message)+'</div>';
   }
-
   isLoading = false;
   document.getElementById('sendBtn').disabled = false;
   log.scrollTop = log.scrollHeight;
@@ -309,8 +304,8 @@ function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 
 async function delSession(id) {
   try {
-    await fetch('/chat/memory', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true, session_id: id})});
-    if (curSession === id) newChat();
+    await fetch('/chat/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true,session_id:id})});
+    if (curSession===id) newChat();
     loadSessions();
   } catch(e) {}
 }
@@ -318,38 +313,25 @@ async function delSession(id) {
 async function loadSession(id) {
   curSession = id;
   document.getElementById('chatTitle').textContent = '对话';
-  document.querySelectorAll('.history-item').forEach(e => e.classList.remove('active'));
-  const log = document.getElementById('chatLog');
+  document.querySelectorAll('.history-item').forEach(function(e){e.classList.remove('active');});
+  var log = document.getElementById('chatLog');
   log.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">加载中...</div>';
   try {
-    const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/messages');
-    if (!r.ok) throw Error('not found');
-    const msgs = await r.json();
+    var msgs = await (await fetch('/api/sessions/'+encodeURIComponent(id)+'/messages')).json();
     log.innerHTML = '';
-    msgs.forEach(m => {
-      const isUser = m.role === 'user';
-      log.insertAdjacentHTML('beforeend',
-        '<div class="msg ' + (isUser ? 'user' : 'bot') + '">' +
-        '<div class="msg-av">' + (isUser ? 'U' : 'M') + '</div>' +
-        '<div class="msg-bub">' + esc(m.content) + '</div></div>');
+    msgs.forEach(function(m){
+      var u = m.role==='user';
+      log.insertAdjacentHTML('beforeend','<div class="msg '+(u?'user':'bot')+'"><div class="msg-av">'+(u?'U':'M')+'</div><div class="msg-bub">'+esc(m.content)+'</div></div>');
     });
-    if (!msgs.length) {
-      log.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">空对话</div>';
-    }
-  } catch(e) {
-    log.innerHTML = '<div class="msg bot"><div class="msg-av">M</div><div class="msg-bub">无法加载历史</div></div>';
-  }
+    if (!msgs.length) log.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">空对话</div>';
+  } catch(e) { log.innerHTML = '<div class="msg bot"><div class="msg-av">M</div><div class="msg-bub">无法加载历史</div></div>'; }
   log.scrollTop = log.scrollHeight;
-  document.querySelectorAll('.history-item').forEach(e => {
-    if (e.textContent.includes(id.slice(0,8))) e.classList.add('active');
-  });
+  document.querySelectorAll('.history-item').forEach(function(e){if(e.textContent.indexOf(id.slice(0,8))>=0)e.classList.add('active');});
 }
 
 function filterHistory() {
-  const q = document.getElementById('searchHist').value.toLowerCase();
-  document.querySelectorAll('.history-item').forEach(el => {
-    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
-  });
+  var q = document.getElementById('searchHist').value.toLowerCase();
+  document.querySelectorAll('.history-item').forEach(function(e){e.style.display = e.textContent.toLowerCase().indexOf(q)>=0?'':'none';});
 }
 
 loadConfig();

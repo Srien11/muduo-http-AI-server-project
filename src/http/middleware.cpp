@@ -23,6 +23,14 @@ bool MiddlewareChain::Run(const HttpRequest& request, HttpResponse& response) co
 
 Middleware CreateLoggingMiddleware() {
     return [](const HttpRequest& request, HttpResponse&) {
+        // Skip noisy polling endpoints
+        static const char* skip_paths[] = {
+            "/api/sessions", "/api/stats", "/api/config",
+            "/rag/stats", "/router/status", "/health", nullptr
+        };
+        for (int i = 0; skip_paths[i]; i++) {
+            if (request.path == skip_paths[i]) return true;
+        }
         std::cout << "[http] " << request.method << ' ' << request.path << std::endl;
         return true;
     };

@@ -1069,9 +1069,20 @@ int main(int argc, char* argv[]) {
                 return;
             }
 
+            auto start_time = std::chrono::steady_clock::now();
             auto result = memory_manager->Process(message, session);
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_time).count();
             if (result.success) {
-                response.SetBody(nlohmann::json({{"response", result.content}}).dump());
+                nlohmann::json resp = {{"response", result.content},
+                                       {"elapsed_ms", elapsed}};
+                if (!result.reasoning_content.empty())
+                    resp["reasoning"] = result.reasoning_content;
+                if (result.prompt_tokens > 0 || result.completion_tokens > 0) {
+                    resp["usage"] = {{"prompt_tokens", result.prompt_tokens},
+                                     {"completion_tokens", result.completion_tokens}};
+                }
+                response.SetBody(resp.dump());
             } else {
                 response.SetStatusCode(502);
                 response.SetBody(nlohmann::json({{"error", result.error_message}}).dump());
