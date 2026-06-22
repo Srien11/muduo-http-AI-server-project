@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <muduo/base/ThreadPool.h>
+
 #include "http/ai_gateway.h"
 #include "http/chat_agent.h"
 #include "http/config_manager.h"
@@ -1151,7 +1153,6 @@ int main(int argc, char* argv[]) {
         chat_agent, ai_gateway, "memory");
 
     // Available providers: name → {api_base, model}
-    // api_key is loaded from server.conf on each request (or set via /api/config)
     std::map<std::string, std::pair<std::string, std::string>> providers = {
         {"deepseek", {"https://api.deepseek.com/v1", "deepseek-v4-flash"}},
         {"openai",   {"https://api.openai.com/v1",    "gpt-4o"}},
@@ -1168,77 +1169,78 @@ int main(int argc, char* argv[]) {
         response.SetBody(j.dump(2));
     });
 
-    // POST /chat/stream - streaming chat (NDJSON, real-time reasoning + content)
-    server.routes().Post("/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
-                                                       muduo_http::HttpResponse&) {
-        auto writer = std::make_shared<muduo_http::StreamWriter>(
-            req.stream_conn, 200, "OK", "text/plain; charset=utf-8");
-        req.stream = writer;
+    // Worker thread pool — AI requests run here, not blocking IO threads
+    muduo::ThreadPool worker_pool("ai-workers");
+    worker_pool.start(8);
+    auto* loop = server.get_loop();
 
-        try {
-            auto body = nlohmann::json::parse(req.body);
-            std::string message = body.value("message", "");
-            if (message.empty()) {
-                writer->WriteChunk(R"({"type":"error","data":"消息不能为空"})" "\n");
-                writer->End(); return;
-            }
-
-            muduo_http::AiChatRequest chat_req;
-            chat_req.messages.push_back({"user", message});
-            chat_req.stream = true;
-            ai_gateway->ChatStream(chat_req, *writer);
-        } catch (const std::exception& e) {
-            nlohmann::json err = {{"type", "error"}, {"data", std::string("parse error: ") + e.what()}};
-            writer->WriteChunk(err.dump() + "\n");
-            writer->End();
+    // POST /chat/memory - async chat with long-term memory + provider switching
+    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, &providers, &worker_pool, loop]
+    (const muduo_http::HttpRequest& req, muduo_http::HttpResponse&) {
+        // Parse request on IO thread
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); } catch (...) {
+            // Send parse error synchronously
+            std::string err = nlohmann::json({{"error", "JSON parse error"}}).dump();
+            std::ostringstream h;
+            h << "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: "
+              << err.size() << "\r\nConnection: close\r\n\r\n" << err;
+            req.stream_conn->send(h.str());
+            req.stream_conn->shutdown();
+            return;
         }
-    });
 
-    // POST /chat/memory - chat with long-term memory + provider switching
-    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, &providers](const muduo_http::HttpRequest& req,
-                                                                                   muduo_http::HttpResponse& response) {
-        response.SetHeader("Content-Type", "application/json");
+        // Signal HttpServer: we'll handle the response ourselves
+        req.stream = std::make_shared<muduo_http::StreamWriter>(
+            req.stream_conn, 200, "OK", "application/json");
 
-        try {
-            auto body = nlohmann::json::parse(req.body);
-            std::string message = body.value("message", "");
-            std::string session = body.value("session_id", "default");
-            std::string provider = body.value("provider", "deepseek");
+        std::string message = body.value("message", "");
+        std::string session = body.value("session_id", "default");
+        std::string provider = body.value("provider", "deepseek");
 
-            if (body.value("clear", false)) {
-                memory_manager->ClearSession(session);
-                response.SetBody(nlohmann::json({{"response", "已清除"}}).dump());
-                return;
-            }
-            if (message.empty()) {
-                response.SetBody(nlohmann::json({{"error", "消息不能为空"}}).dump());
-                return;
-            }
+        if (body.value("clear", false)) {
+            memory_manager->ClearSession(session);
+            nlohmann::json resp = {{"response", "已清除"}};
+            std::string json = resp.dump();
+            std::ostringstream h;
+            h << "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+              << json.size() << "\r\nConnection: close\r\n\r\n" << json;
+            req.stream_conn->send(h.str());
+            req.stream_conn->shutdown();
+            return;
+        }
+        if (message.empty()) {
+            nlohmann::json resp = {{"error", "消息不能为空"}};
+            std::string json = resp.dump();
+            std::ostringstream h;
+            h << "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: "
+              << json.size() << "\r\nConnection: close\r\n\r\n" << json;
+            req.stream_conn->send(h.str());
+            req.stream_conn->shutdown();
+            return;
+        }
 
-            // Apply selected provider config to the gateway
+        // Capture connection for async response
+        auto conn = req.stream_conn;
+
+        // Post blocking work to thread pool
+        worker_pool.run([memory_manager, ai_gateway, message, session, provider, &providers, loop, conn]() {
+            // ---- This runs on a worker thread ----
+
+            // Apply provider config to gateway
             muduo_http::ConfigManager live_cfg;
             live_cfg.Load("server.conf");
-
-            // Provider api_key: try "ai.<name>.api_key" then "ai.api_key"
             std::string prov_key = live_cfg.Get("ai." + provider + ".api_key", "");
             if (prov_key.empty()) prov_key = live_cfg.Get("ai.api_key", "");
             if (!prov_key.empty()) {
                 ai_gateway->SetApiKey(prov_key);
-
-                // Model: request field > provider default > config default
                 auto it = providers.find(provider);
                 std::string model = it != providers.end() ? it->second.second : "deepseek-v4-flash";
                 std::string base = it != providers.end() ? it->second.first : "https://api.deepseek.com/v1";
-
-                // Override from request body if specified
-                if (body.contains("model")) model = body["model"].get<std::string>();
-
-                // Override from config file if stored
                 std::string cfg_model = live_cfg.Get("ai." + provider + ".model", "");
                 if (!cfg_model.empty()) model = cfg_model;
                 std::string cfg_base = live_cfg.Get("ai." + provider + ".api_base", "");
                 if (!cfg_base.empty()) base = cfg_base;
-
                 ai_gateway->SetModel(model);
                 if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
                     if (base.back() == '/') base += "v1"; else base += "/v1";
@@ -1250,25 +1252,35 @@ int main(int argc, char* argv[]) {
             auto result = memory_manager->Process(message, session);
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start_time).count();
+
+            // Build response JSON
+            nlohmann::json resp;
             if (result.success) {
-                nlohmann::json resp = {{"response", result.content},
-                                       {"elapsed_ms", elapsed},
-                                       {"provider", provider}};
+                resp["response"] = result.content;
+                resp["elapsed_ms"] = elapsed;
+                resp["provider"] = provider;
                 if (!result.reasoning_content.empty())
                     resp["reasoning"] = result.reasoning_content;
-                if (result.prompt_tokens > 0 || result.completion_tokens > 0) {
+                if (result.prompt_tokens > 0 || result.completion_tokens > 0)
                     resp["usage"] = {{"prompt_tokens", result.prompt_tokens},
                                      {"completion_tokens", result.completion_tokens}};
-                }
-                response.SetBody(resp.dump());
             } else {
-                response.SetStatusCode(502);
-                response.SetBody(nlohmann::json({{"error", result.error_message}}).dump());
+                resp["error"] = result.error_message;
             }
-        } catch (const std::exception& e) {
-            response.SetStatusCode(400);
-            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
-        }
+
+            std::string json = resp.dump();
+            int status = result.success ? 200 : 502;
+
+            // Send response back on IO thread
+            loop->runInLoop([conn, json, status]() {
+                std::ostringstream h;
+                h << "HTTP/1.1 " << status << " " << (status == 200 ? "OK" : "Bad Gateway")
+                  << "\r\nContent-Type: application/json\r\nContent-Length: "
+                  << json.size() << "\r\nConnection: close\r\n\r\n" << json;
+                conn->send(h.str());
+                conn->shutdown();
+            });
+        });
     });
 
     // Graceful shutdown
