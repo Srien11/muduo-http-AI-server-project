@@ -527,7 +527,7 @@ int main(int argc, char* argv[]) {
             }
 
             std::string cmd = "curl -sL -A 'Mozilla/5.0' --max-time 15 "
-                "'https://lite.duckduckgo.com/lite/?q=" + safe_query + "' 2>&1";
+                "-d 'q=" + safe_query + "' 'https://lite.duckduckgo.com/lite/' 2>&1";
 
             FILE* pipe = popen(cmd.c_str(), "r");
             if (!pipe) {
@@ -573,17 +573,29 @@ int main(int argc, char* argv[]) {
                 if (title_end == std::string::npos) break;
                 std::string title = html.substr(title_start, title_end - title_start);
 
-                // Find snippet after the link
-                auto snippet_pos = html.find("class=\"result-snippet\"", title_end);
+                // Find snippet after the link — supports both ' and " quotes
+                auto snippet_pos = html.find("class='result-snippet'", title_end);
+                if (snippet_pos == std::string::npos)
+                    snippet_pos = html.find("class=\"result-snippet\"", title_end);
                 std::string snippet;
                 if (snippet_pos != std::string::npos && snippet_pos < title_end + 1000) {
                     auto sn_start = html.find(">", snippet_pos) + 1;
-                    auto sn_end = html.find("</", sn_start);
+                    auto sn_end = html.find("</td>", sn_start);
                     if (sn_end != std::string::npos)
                         snippet = html.substr(sn_start, sn_end - sn_start);
                 }
 
-                // Decode HTML entities
+                // Strip HTML tags and decode entities
+                auto strip_tags = [](std::string s) -> std::string {
+                    std::string out;
+                    bool in_tag = false;
+                    for (char c : s) {
+                        if (c == '<') in_tag = true;
+                        else if (c == '>') in_tag = false;
+                        else if (!in_tag) out += c;
+                    }
+                    return out;
+                };
                 auto decode = [](std::string s) -> std::string {
                     auto replace = [](std::string& str, const std::string& from, const std::string& to) {
                         size_t p = 0;
@@ -601,9 +613,9 @@ int main(int argc, char* argv[]) {
                 };
 
                 found++;
-                output += std::to_string(found) + ". " + decode(title) + "\n";
+                output += std::to_string(found) + ". " + decode(strip_tags(title)) + "\n";
                 output += "   " + url + "\n";
-                if (!snippet.empty()) output += "   " + decode(snippet) + "\n";
+                if (!snippet.empty()) output += "   " + decode(strip_tags(snippet)) + "\n";
                 output += "\n";
 
                 pos = title_end + 4;
