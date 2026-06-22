@@ -666,7 +666,6 @@ int main(int argc, char* argv[]) {
                                              muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
         nlohmann::json sessions = nlohmann::json::array();
-        // Scan memory/ directory for saved chat sessions
         DIR* dir = opendir("memory");
         if (dir) {
             struct dirent* entry;
@@ -675,12 +674,54 @@ int main(int argc, char* argv[]) {
                 if (name.size() > 5 && name.substr(name.size() - 5) == ".json" &&
                     name.substr(0, 5) == "chat_") {
                     std::string sid = name.substr(5, name.size() - 10);
-                    sessions.push_back({{"id", sid}});
+                    // Read first user message as preview
+                    std::string preview = sid.substr(0, 12);
+                    try {
+                        std::ifstream f(std::string("memory/") + name);
+                        nlohmann::json hist;
+                        f >> hist;
+                        for (auto& msg : hist) {
+                            if (msg["role"] == "user" && !msg["content"].empty()) {
+                                std::string c = msg["content"];
+                                if (c.size() > 40) c = c.substr(0, 40) + "...";
+                                preview = c;
+                                break;
+                            }
+                        }
+                    } catch (...) {}
+                    sessions.push_back({{"id", sid}, {"preview", preview}});
                 }
             }
             closedir(dir);
         }
         response.SetBody(sessions.dump(2));
+    });
+
+    // GET /api/sessions/:id/messages - return full history for a session
+    server.routes().Get("/api/sessions/:id/messages", [](const muduo_http::HttpRequest& req,
+                                                          muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        std::string sid = req.path_params.at("id");
+        std::string path = "memory/chat_" + sid + ".json";
+        std::ifstream f(path);
+        if (!f.is_open()) {
+            response.SetBody(nlohmann::json({{"error", "session not found"}}).dump());
+            return;
+        }
+        try {
+            nlohmann::json hist;
+            f >> hist;
+            // Return only user + assistant messages (skip system)
+            nlohmann::json msgs = nlohmann::json::array();
+            for (auto& msg : hist) {
+                if (msg["role"] == "user" || msg["role"] == "assistant") {
+                    msgs.push_back({{"role", msg["role"]}, {"content", msg.value("content", "")}});
+                }
+            }
+            response.SetBody(msgs.dump(2));
+        } catch (...) {
+            response.SetBody(nlohmann::json({{"error", "parse error"}}).dump());
+        }
     });
 
     // ----- RAG Pipeline -----
@@ -769,14 +810,19 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    // Create chat agent
-    auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
-        ai_gateway, tool_executor,
-        "你是知墨（ZhiMo），一个由深度求索公司 DeepSeek 模型驱动的 AI 助手。"
+    // Create chat agent — system prompt reads model name from config
+    std::string model_name = cfg.Get("ai.model", "deepseek-v4-flash");
+    std::string system_prompt =
+        "你是知墨（ZhiMo），一个自建的 AI 助手。"
+        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，"
+        "也不代表任何公司。"
         "你有访问工具的能力，需要在回答问题时适当使用工具。"
         "可用工具：read_file（读取文件内容）、list_directory（列出目录）、"
         "echo（回显消息）、system_info（查看系统信息）。"
-        "当用户问你是谁时，回答你是知墨，由 DeepSeek 驱动。"
+        "你有长期记忆能力，每次对话都会自动保存，下次可以继续。"
+        "当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
+    auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
+        ai_gateway, tool_executor, system_prompt
     );
 
     if (!agent_tools.empty()) {
