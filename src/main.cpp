@@ -56,6 +56,10 @@ int main(int argc, char* argv[]) {
 
     LOG_INFO("server starting...");
 
+    // Auth password (empty = no auth required)
+    std::string auth_password = cfg.Get("auth.password", "");
+    bool auth_enabled = !auth_password.empty();
+
     // Create server from config
     int port = cfg.GetInt("server.port", 8080);
     int threads = cfg.GetInt("server.threads", 4);
@@ -67,6 +71,24 @@ int main(int argc, char* argv[]) {
     // Session middleware is registered automatically by HttpServer
     server.Use(muduo_http::CreateLoggingMiddleware());
     server.Use(muduo_http::CreateCorsMiddleware());
+
+    // Auth middleware - checks X-Auth-Token header
+    if (auth_enabled) {
+        server.Use([auth_password](const muduo_http::HttpRequest& req, muduo_http::HttpResponse& resp) {
+            // Allow auth endpoint and static files without token
+            if (req.path == "/api/auth" || req.path == "/" || req.path == "/index.html"
+                || req.path.find("/api/auth") == 0) return true;
+            auto it = req.headers.find("X-Auth-Token");
+            if (it == req.headers.end() || it->second != auth_password) {
+                resp.SetStatusCode(401);
+                resp.SetStatusMessage("Unauthorized");
+                resp.SetBody("{\"error\":\"请先登录\"}");
+                resp.SetHeader("Content-Type", "application/json");
+                return false;
+            }
+            return true;
+        });
+    }
 
     // Static routes
     server.routes().Get("/", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
@@ -1109,8 +1131,10 @@ int main(int argc, char* argv[]) {
         "4. 编译或运行代码时，使用 execute_command 执行，并把输出返回给用户。\n"
         "5. 如果工具调用出错，向用户解释错误并尝试其他方法。\n"
         "6. 你有长期记忆能力，每次对话都会自动保存，下次可以继续。\n"
-        "7. 回复时使用自然语言，不要用 markdown 格式包裹普通文字。"
-        "代码块可以用 ``` 标注，但普通回答不要用 markdown 标题、列表符号等。\n"
+        "7. 回复时使用纯文本自然语言，不要用 markdown 符号。"
+        "不允许使用 **、*、#、- 等 markdown 标记符号。"
+        "如果用户问的是列表，用换行和数字/短横即可。"
+        "代码可以用 ``` 标注，但普通回答禁止任何 markdown 格式。\n"
         "8. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
         ai_gateway, tool_executor, system_prompt
