@@ -123,6 +123,7 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
       </button>
     </div>
     <div class="hint" id="keyHint">未配置 API Key</div>
+    <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;" id="statsBar"></div>
   </div>
 </div>
 
@@ -140,6 +141,23 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
     <div class="field">
       <label>API 地址</label>
       <input id="sApiBase" placeholder="https://api.openai.com/v1" onchange="saveSettings()">
+    </div>
+    <div class="field">
+      <label>限流 (次/秒)</label>
+      <input id="sRateLimit" type="number" placeholder="10" onchange="saveSettings()">
+    </div>
+    <div class="field" style="display:flex;align-items:center;gap:8px;">
+      <input id="sCache" type="checkbox" onchange="saveSettings()">
+      <label style="margin:0;">启用缓存</label>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+    <div style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">服务器状态</div>
+    <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
+      <div>运行时间: <span id="statUptime">-</span></div>
+      <div>请求数: <span id="statReqs">-</span></div>
+      <div>活跃连接: <span id="statConns">-</span></div>
+      <div>平均响应: <span id="statResp">-</span></div>
+      <div>知识库: <span id="statRag">-</span></div>
     </div>
     <div class="actions">
       <button class="sec" onclick="closeSettings()">取消</button>
@@ -160,8 +178,32 @@ async function loadConfig() {
     document.getElementById('sApiKey').value = d.api_key || '';
     document.getElementById('sModel').value = d.model || 'gpt-3.5-turbo';
     document.getElementById('sApiBase').value = d.api_base || '';
+    document.getElementById('sRateLimit').value = d.rate_limit_rps || 10;
+    document.getElementById('sCache').checked = d.cache_enabled !== false;
     document.getElementById('modelBadge').textContent = d.model || '?';
     document.getElementById('keyHint').textContent = d.api_key ? '已配置' : '未配置 API Key';
+  } catch(e) {}
+}
+
+async function loadStats() {
+  try {
+    const [sr, rr] = await Promise.all([
+      fetch('/api/stats'),
+      fetch('/rag/stats').catch(() => null)
+    ]);
+    const s = await sr.json();
+    document.getElementById('statUptime').textContent = (s.uptime_seconds || 0) + 's';
+    document.getElementById('statReqs').textContent = s.requests || 0;
+    document.getElementById('statConns').textContent = s.active_connections || 0;
+    document.getElementById('statResp').textContent = (s.avg_response_ms || 0).toFixed(1) + 'ms';
+    if (rr && rr.ok) {
+      const r = await rr.json();
+      document.getElementById('statRag').textContent = (r.chunks || 0) + ' 块';
+    }
+    const bar = document.getElementById('statsBar');
+    if (s.uptime_seconds) {
+      bar.textContent = '运行 ' + Math.floor(s.uptime_seconds/60) + 'm · ' + (s.requests||0) + ' 请求 · ' + (s.active_connections||0) + ' 连接';
+    }
   } catch(e) {}
 }
 
@@ -189,11 +231,13 @@ async function saveSettings() {
   const key = document.getElementById('sApiKey').value;
   const model = document.getElementById('sModel').value;
   const base = document.getElementById('sApiBase').value;
+  const rps = parseInt(document.getElementById('sRateLimit').value) || 10;
+  const cache = document.getElementById('sCache').checked;
   try {
     await fetch('/api/config', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({api_key: key, model: model, api_base: base})
+      body: JSON.stringify({api_key: key, model: model, api_base: base, rate_limit_rps: rps, cache_enabled: cache})
     });
     document.getElementById('modelBadge').textContent = model || '?';
     document.getElementById('keyHint').textContent = key ? '已配置' : '未配置 API Key';
@@ -310,7 +354,9 @@ function filterHistory() {
 
 loadConfig();
 loadSessions();
+loadStats();
 setInterval(loadSessions, 5000);
+setInterval(loadStats, 10000);
 </script>
 </body>
 </html>

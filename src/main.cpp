@@ -579,12 +579,14 @@ int main(int argc, char* argv[]) {
         nlohmann::json j = {
             {"api_key", live_cfg.Get("ai.api_key", "")},
             {"model", live_cfg.Get("ai.model", "gpt-3.5-turbo")},
-            {"api_base", live_cfg.Get("ai.api_base", "https://api.openai.com/v1")}
+            {"api_base", live_cfg.Get("ai.api_base", "https://api.openai.com/v1")},
+            {"rate_limit_rps", live_cfg.GetInt("ai.rate_limit_rps", 10)},
+            {"cache_enabled", live_cfg.GetBool("ai.cache_enabled", true)}
         };
         response.SetBody(j.dump(2));
     });
 
-    server.routes().Post("/api/config", [ai_gateway](const muduo_http::HttpRequest& req,
+    server.routes().Post("/api/config", [ai_gateway, &server](const muduo_http::HttpRequest& req,
                                                       muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
         try {
@@ -635,6 +637,34 @@ int main(int argc, char* argv[]) {
                 } else {
                     auto ai_eol = content.find('\n', pos) + 1;
                     content.insert(ai_eol, "api_base = " + base + "\n");
+                }
+            }
+
+            if (body.contains("rate_limit_rps")) {
+                std::string val = std::to_string(body["rate_limit_rps"].get<int>());
+                auto pos = content.find("[ai]");
+                auto r_pos = content.find("rate_limit_rps", pos);
+                auto next_sec = content.find("[", pos + 4);
+                if (r_pos != std::string::npos && r_pos < next_sec) {
+                    auto eol = content.find('\n', r_pos);
+                    content.replace(r_pos, eol - r_pos + 1, "rate_limit_rps = " + val + "\n");
+                } else {
+                    auto ai_eol = content.find('\n', pos) + 1;
+                    content.insert(ai_eol, "rate_limit_rps = " + val + "\n");
+                }
+            }
+
+            if (body.contains("cache_enabled")) {
+                std::string val = body["cache_enabled"].get<bool>() ? "true" : "false";
+                auto pos = content.find("[ai]");
+                auto c_pos = content.find("cache_enabled", pos);
+                auto next_sec = content.find("[", pos + 4);
+                if (c_pos != std::string::npos && c_pos < next_sec) {
+                    auto eol = content.find('\n', c_pos);
+                    content.replace(c_pos, eol - c_pos + 1, "cache_enabled = " + val + "\n");
+                } else {
+                    auto ai_eol = content.find('\n', pos) + 1;
+                    content.insert(ai_eol, "cache_enabled = " + val + "\n");
                 }
             }
 
