@@ -17,3 +17,5 @@ server.conf
 memory/
 vectors.json
 server.conf
+.claude/
+scripts/
