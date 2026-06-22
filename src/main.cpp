@@ -772,9 +772,11 @@ int main(int argc, char* argv[]) {
     // Create chat agent
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
         ai_gateway, tool_executor,
-        "You are a helpful assistant with access to tools. "
-        "Use tools when needed to answer the user's questions. "
-        "The available tools are: read_file, list_directory, echo, system_info."
+        "你是知墨（ZhiMo），一个由深度求索公司 DeepSeek 模型驱动的 AI 助手。"
+        "你有访问工具的能力，需要在回答问题时适当使用工具。"
+        "可用工具：read_file（读取文件内容）、list_directory（列出目录）、"
+        "echo（回显消息）、system_info（查看系统信息）。"
+        "当用户问你是谁时，回答你是知墨，由 DeepSeek 驱动。"
     );
 
     if (!agent_tools.empty()) {
