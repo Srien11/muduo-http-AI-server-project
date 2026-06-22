@@ -1053,6 +1053,31 @@ int main(int argc, char* argv[]) {
         response.SetBody(j.dump(2));
     });
 
+    // POST /chat/stream - streaming chat (SSE, no tools, real-time reasoning + content)
+    server.routes().Post("/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
+                                                       muduo_http::HttpResponse&) {
+        auto writer = std::make_shared<muduo_http::StreamWriter>(
+            req.stream_conn, 200, "OK", "text/event-stream");
+        req.stream = writer;
+
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string message = body.value("message", "");
+            if (message.empty()) {
+                writer->WriteSSE("error", "消息不能为空");
+                writer->WriteSSE("done", ""); writer->End(); return;
+            }
+
+            muduo_http::AiChatRequest chat_req;
+            chat_req.messages.push_back({"user", message});
+            chat_req.stream = true;
+            ai_gateway->ChatStream(chat_req, *writer);
+        } catch (const std::exception& e) {
+            writer->WriteSSE("error", std::string("parse error: ") + e.what());
+            writer->WriteSSE("done", ""); writer->End();
+        }
+    });
+
     // POST /chat/memory - chat with long-term memory + provider switching
     server.routes().Post("/chat/memory", [memory_manager, ai_gateway, &providers](const muduo_http::HttpRequest& req,
                                                                                    muduo_http::HttpResponse& response) {
