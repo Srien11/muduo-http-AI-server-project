@@ -450,6 +450,36 @@ int main(int argc, char* argv[]) {
             return result;
         });
 
+    // write_file - write content to a file
+    mcp_server->RegisterTool(
+        {"write_file", "Write text content to a file (creates or overwrites)",
+         {{"path", "Absolute path to the file", "string", true},
+          {"content", "Text content to write", "string", true}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string path = args.value("path", "");
+            std::string content = args.value("content", "");
+            if (path.find("..") != std::string::npos) {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path (\"..\" not allowed)"));
+                result.is_error = true;
+                return result;
+            }
+            std::ofstream file(path);
+            if (!file.is_open()) {
+                result.content.push_back(
+                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot open file for writing: " + path));
+                result.is_error = true;
+                return result;
+            }
+            file << content;
+            file.close();
+            result.content.push_back(
+                muduo_http::mcp::McpProtocol::TextContent(
+                    "成功写入 " + std::to_string(content.size()) + " 字节到 " + path));
+            return result;
+        });
+
     // list_directory - list files in a directory
     mcp_server->RegisterTool(
         {"list_directory", "List files in a directory",
@@ -846,9 +876,9 @@ int main(int argc, char* argv[]) {
         "你是知墨（ZhiMo），一个自建的 AI 助手。"
         "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，"
         "也不代表任何公司。"
-        "你有访问工具的能力，需要在回答问题时适当使用工具。"
-        "可用工具：read_file（读取文件内容）、list_directory（列出目录）、"
-        "echo（回显消息）、system_info（查看系统信息）。"
+        "你有访问工具的能力，可以在需要时读写文件。"
+        "可用工具：read_file（读取文件内容）、write_file（写入文件）、"
+        "list_directory（列出目录）、echo（回显消息）、system_info（查看系统信息）。"
         "你有长期记忆能力，每次对话都会自动保存，下次可以继续。"
         "当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
