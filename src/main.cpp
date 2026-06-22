@@ -218,6 +218,7 @@ int main(int argc, char* argv[]) {
 
     // ----- AI Gateway demo -----
     muduo_http::AiConfig ai_cfg;
+    ai_cfg.api_key = cfg.Get("ai.api_key", "");
     ai_cfg.api_base = cfg.Get("ai.api_base", "https://api.openai.com/v1");
     ai_cfg.model = cfg.Get("ai.model", "gpt-3.5-turbo");
     ai_cfg.rate_limit_rps = cfg.GetInt("ai.rate_limit_rps", 10);
@@ -540,16 +541,16 @@ int main(int argc, char* argv[]) {
             if (count < 1) count = 1;
             if (count > 10) count = 10;
 
-            // Use DuckDuckGo lite HTML search (no API key required)
-            // Escape query for shell
+            // URL-encode the query for shell-safe curl call
             std::string safe_query;
-            for (char c : query) {
+            for (unsigned char c : query) {
                 if (c == '\'') safe_query += "'\\''";
                 else safe_query += c;
             }
 
+            // Use curl to fetch HTML from DuckDuckGo lite (no API key required)
             std::string cmd = "curl -sL -A 'Mozilla/5.0' --max-time 15 "
-                "-d 'q=" + safe_query + "' 'https://lite.duckduckgo.com/lite/' 2>&1";
+                "--data-urlencode 'q=" + safe_query + "' 'https://lite.duckduckgo.com/lite/' 2>&1";
 
             FILE* pipe = popen(cmd.c_str(), "r");
             if (!pipe) {
@@ -560,79 +561,109 @@ int main(int argc, char* argv[]) {
             std::string html;
             char buf[8192];
             while (fgets(buf, sizeof(buf), pipe)) html += buf;
-            pclose(pipe);
+            (void)pclose(pipe);
 
             if (html.empty()) {
-                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("搜索无结果"));
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("搜索无结果（网络请求返回空）"));
                 return result;
             }
 
-            // Parse HTML to extract search results
-            // DuckDuckGo lite format: <a href="url" class="result-link">title</a>
+            // Helper: strip HTML tags
+            auto strip_tags = [](const std::string& s) -> std::string {
+                std::string out;
+                bool in_tag = false;
+                for (char c : s) {
+                    if (c == '<') in_tag = true;
+                    else if (c == '>') in_tag = false;
+                    else if (!in_tag) out += c;
+                }
+                return out;
+            };
+            // Helper: decode HTML entities
+            auto decode = [](std::string s) -> std::string {
+                auto replace_all = [](std::string& str, const std::string& from, const std::string& to) {
+                    size_t p = 0;
+                    while ((p = str.find(from, p)) != std::string::npos) {
+                        str.replace(p, from.length(), to);
+                        p += to.length();
+                    }
+                };
+                replace_all(s, "&amp;", "&");
+                replace_all(s, "&lt;", "<");
+                replace_all(s, "&gt;", ">");
+                replace_all(s, "&quot;", "\"");
+                replace_all(s, "&#x27;", "'");
+                replace_all(s, "&#x2F;", "/");
+                return s;
+            };
+
+            // Parse DuckDuckGo lite results
+            // Structure: <a rel="nofollow" href="URL">TITLE</a> ... snippet in sibling <td class="result-snippet">
             std::string output;
             int found = 0;
             size_t pos = 0;
+
+            // Try multiple parsing strategies
+            // Strategy 1: DDG lite format with rel="nofollow" links
             while (found < count) {
-                // Find result link
                 auto link_start = html.find("<a ", pos);
                 if (link_start == std::string::npos) break;
 
+                // Check if this is a result link (has href with http)
                 auto href_pos = html.find("href=\"", link_start);
-                if (href_pos == std::string::npos || href_pos > link_start + 100) { pos = link_start + 1; continue; }
+                if (href_pos == std::string::npos || href_pos > link_start + 80) { pos = link_start + 1; continue; }
                 href_pos += 6;
                 auto href_end = html.find("\"", href_pos);
                 if (href_end == std::string::npos) break;
                 std::string url = html.substr(href_pos, href_end - href_pos);
 
-                // Skip ads and irrelevant links
-                if (url.find("//") == std::string::npos || url.find("duckduckgo") != std::string::npos) {
-                    pos = href_end; continue;
+                // Skip non-http links, ads, and duckduckgo internal links
+                if (url.find("http") != 0 || url.find("duckduckgo") != std::string::npos ||
+                    url.find("//duckduckgo.com") != std::string::npos ||
+                    url.find("//html.duckduckgo.com") != std::string::npos) {
+                    pos = link_start + 1; continue;
                 }
 
-                // Find title between <a ...> and </a>
-                auto title_start = html.find(">", href_end) + 1;
+                // Find title
+                auto gt_pos = html.find(">", href_end);
+                if (gt_pos == std::string::npos) break;
+                auto title_start = gt_pos + 1;
                 auto title_end = html.find("</a>", title_start);
                 if (title_end == std::string::npos) break;
                 std::string title = html.substr(title_start, title_end - title_start);
+                // Skip empty titles or image links
+                if (title.empty() || title.find("<img") != std::string::npos) { pos = link_start + 1; continue; }
 
-                // Find snippet after the link — supports both ' and " quotes
-                auto snippet_pos = html.find("class='result-snippet'", title_end);
-                if (snippet_pos == std::string::npos)
-                    snippet_pos = html.find("class=\"result-snippet\"", title_end);
+                // Find snippet: look for "result-snippet" class in surrounding HTML (within ~500 chars)
+                auto search_start = (title_end > 50) ? title_end - 50 : 0;
+                auto search_end = title_end + 500;
+                if (search_end > html.size()) search_end = html.size();
+                std::string context = html.substr(search_start, search_end - search_start);
+
+                auto snippet_pos = context.find("result-snippet");
                 std::string snippet;
-                if (snippet_pos != std::string::npos && snippet_pos < title_end + 1000) {
-                    auto sn_start = html.find(">", snippet_pos) + 1;
-                    auto sn_end = html.find("</td>", sn_start);
-                    if (sn_end != std::string::npos)
-                        snippet = html.substr(sn_start, sn_end - sn_start);
+                if (snippet_pos != std::string::npos) {
+                    auto sn_td_start = context.rfind("<td", snippet_pos);
+                    if (sn_td_start != std::string::npos) {
+                        auto sn_start = context.find(">", sn_td_start) + 1;
+                        auto sn_end = context.find("</td>", sn_start);
+                        if (sn_end != std::string::npos)
+                            snippet = context.substr(sn_start, sn_end - sn_start);
+                    }
                 }
 
-                // Strip HTML tags and decode entities
-                auto strip_tags = [](std::string s) -> std::string {
-                    std::string out;
-                    bool in_tag = false;
-                    for (char c : s) {
-                        if (c == '<') in_tag = true;
-                        else if (c == '>') in_tag = false;
-                        else if (!in_tag) out += c;
+                // Also try to find snippet via <td class="snippet">
+                if (snippet.empty()) {
+                    auto alt_snip = html.find("<td class=\"snippet\">", title_end);
+                    if (alt_snip == std::string::npos)
+                        alt_snip = html.find("<td class='snippet'>", title_end);
+                    if (alt_snip != std::string::npos && alt_snip < title_end + 600) {
+                        auto sn_start = html.find(">", alt_snip) + 1;
+                        auto sn_end = html.find("</td>", sn_start);
+                        if (sn_end != std::string::npos)
+                            snippet = html.substr(sn_start, sn_end - sn_start);
                     }
-                    return out;
-                };
-                auto decode = [](std::string s) -> std::string {
-                    auto replace = [](std::string& str, const std::string& from, const std::string& to) {
-                        size_t p = 0;
-                        while ((p = str.find(from, p)) != std::string::npos) {
-                            str.replace(p, from.length(), to);
-                            p += to.length();
-                        }
-                    };
-                    replace(s, "&amp;", "&");
-                    replace(s, "&lt;", "<");
-                    replace(s, "&gt;", ">");
-                    replace(s, "&quot;", "\"");
-                    replace(s, "&#x27;", "'");
-                    return s;
-                };
+                }
 
                 found++;
                 output += std::to_string(found) + ". " + decode(strip_tags(title)) + "\n";
@@ -643,7 +674,18 @@ int main(int argc, char* argv[]) {
                 pos = title_end + 4;
             }
 
-            if (output.empty()) output = "(未找到结果)";
+            if (output.empty()) {
+                // Strategy 2: Try HTML snippet extraction - look for any table-based result
+                // If DDG returned a different format, dump a hint
+                output = "(未找到搜索结果，DDG 页面格式可能已变化)\n";
+                // Extract page title as a hint
+                auto title_pos = html.find("<title>");
+                if (title_pos != std::string::npos) {
+                    auto t_end = html.find("</title>", title_pos);
+                    if (t_end != std::string::npos)
+                        output += "页面标题: " + html.substr(title_pos + 7, t_end - title_pos - 7) + "\n";
+                }
+            }
             result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(output));
             return result;
         });
