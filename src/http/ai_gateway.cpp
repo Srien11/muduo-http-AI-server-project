@@ -186,11 +186,11 @@ static size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, voi
 
                 if (delta.contains("reasoning_content") && !delta["reasoning_content"].is_null()) {
                     nlohmann::json out = {{"type", "reasoning"}, {"data", delta["reasoning_content"].get<std::string>()}};
-                    ctx->writer->WriteRaw(out.dump() + "\n");
+                    ctx->writer->WriteChunk(out.dump() + "\n");
                 }
                 if (delta.contains("content") && !delta["content"].is_null()) {
                     nlohmann::json out = {{"type", "token"}, {"data", delta["content"].get<std::string>()}};
-                    ctx->writer->WriteRaw(out.dump() + "\n");
+                    ctx->writer->WriteChunk(out.dump() + "\n");
                 }
             } catch (...) {}
         }
@@ -235,11 +235,11 @@ void AiGateway::ChatStream(const AiChatRequest& request, StreamWriter& writer) {
 
     if (res != CURLE_OK) {
         nlohmann::json err = {{"type", "error"}, {"data", std::string("curl: ") + curl_easy_strerror(res)}};
-        writer.WriteRaw(err.dump() + "\n");
+        writer.WriteChunk(err.dump() + "\n");
     }
 
     nlohmann::json done = {{"type", "done"}, {"data", ""}};
-    writer.WriteRaw(done.dump() + "\n");
+    writer.WriteChunk(done.dump() + "\n");
     writer.End();
 }
 
