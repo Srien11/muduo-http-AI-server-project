@@ -381,132 +381,206 @@ int main(int argc, char* argv[]) {
     mcp_server->set_event_loop(server.get_loop());
 
     // Register built-in tools
-    // echo - test tool
-    mcp_server->RegisterTool(
-        {"echo", "Echo back the input message",
-         {{"message", "Message to echo back", "string", true}}},
-        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
-            std::string msg = args.value("message", "");
-            auto result = muduo_http::mcp::ToolResult{};
-            result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(msg));
-            return result;
-        });
-
-    // system_info - get system information
-    mcp_server->RegisterTool(
-        {"system_info", "Get system information (OS, CPU, memory, uptime)",
-         {}},
-        [](const nlohmann::json&) -> muduo_http::mcp::ToolResult {
-            auto result = muduo_http::mcp::ToolResult{};
-            result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(
-                    "OS: Linux (WSL)\nCPU: x86_64\nRAM: N/A\nUptime: N/A\n"));
-            return result;
-        });
-
     // read_file - read file contents
     mcp_server->RegisterTool(
-        {"read_file", "Read the contents of a file",
-         {{"path", "Absolute path to the file (supports /linux/path or D:/windows/path)", "string", true}}},
+        {"read_file", "读取文件内容并返回文本。用于查看代码文件、配置、文档等。不能读取二进制文件。",
+         {{"path", "文件路径，支持 /linux/path 或 D:/windows/path 格式", "string", true}}},
         [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
             auto result = muduo_http::mcp::ToolResult{};
             std::string path = args.value("path", "");
-            // Security: block ".." path traversal
             if (path.find("..") != std::string::npos) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path (\"..\" not allowed)"));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
             }
             std::ifstream file(path, std::ios::binary);
             if (!file.is_open()) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot open file"));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：无法打开文件 " + path));
+                result.is_error = true; return result;
             }
-            std::ostringstream buf;
-            buf << file.rdbuf();
+            std::ostringstream buf; buf << file.rdbuf();
             std::string content = buf.str();
-
-            // Check for binary content (null bytes or non-UTF-8)
             bool is_binary = false;
-            for (size_t i = 0; i < content.size() && i < 4096; i++) {
-                unsigned char c = content[i];
-                if (c == 0) { is_binary = true; break; }
-            }
+            for (size_t i = 0; i < content.size() && i < 4096; i++)
+                if ((unsigned char)content[i] == 0) { is_binary = true; break; }
             if (is_binary) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent(
-                        "Error: file appears to be binary (" + std::to_string(content.size()) + " bytes). "
-                        "Only text files can be displayed."));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(
+                    "错误：文件是二进制文件（" + std::to_string(content.size()) + " 字节），无法显示"));
+                result.is_error = true; return result;
             }
-
-            result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(content));
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(content));
             return result;
         });
 
-    // write_file - write content to a file
+    // write_file - create or overwrite a file
     mcp_server->RegisterTool(
-        {"write_file", "Write text content to a file (creates or overwrites)",
-         {{"path", "Absolute path to the file", "string", true},
-          {"content", "Text content to write", "string", true}}},
+        {"write_file", "写入内容到文件。创建新文件或覆盖已有文件。用于保存代码、配置、文档等。",
+         {{"path", "文件路径", "string", true},
+          {"content", "要写入的文本内容", "string", true}}},
         [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
             auto result = muduo_http::mcp::ToolResult{};
             std::string path = args.value("path", "");
             std::string content = args.value("content", "");
             if (path.find("..") != std::string::npos) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path (\"..\" not allowed)"));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
             }
             std::ofstream file(path);
             if (!file.is_open()) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot open file for writing: " + path));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：无法写入文件 " + path));
+                result.is_error = true; return result;
             }
-            file << content;
-            file.close();
-            result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(
-                    "成功写入 " + std::to_string(content.size()) + " 字节到 " + path));
+            file << content; file.close();
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(
+                "已写入 " + std::to_string(content.size()) + " 字节到 " + path));
+            return result;
+        });
+
+    // edit_file - targeted edits in existing file
+    mcp_server->RegisterTool(
+        {"edit_file", "对已存在的文件进行精确编辑。支持两种模式：1) old_text→new_text 替换 2) 在指定行插入/追加。比 write_file 更适合修改大文件中的局部内容。",
+         {{"path", "文件路径", "string", true},
+          {"old_text", "要被替换的原文（唯一匹配）", "string", true},
+          {"new_text", "替换后的新文本", "string", true}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string path = args.value("path", "");
+            std::string old_text = args.value("old_text", "");
+            std::string new_text = args.value("new_text", "");
+            if (path.find("..") != std::string::npos) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
+            }
+            std::ifstream fin(path);
+            if (!fin.is_open()) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：无法打开文件 " + path));
+                result.is_error = true; return result;
+            }
+            std::string content((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
+            fin.close();
+            auto pos = content.find(old_text);
+            if (pos == std::string::npos) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：在文件中未找到匹配的原文。请确保 old_text 是精确匹配。"));
+                result.is_error = true; return result;
+            }
+            content.replace(pos, old_text.size(), new_text);
+            std::ofstream fout(path);
+            fout << content; fout.close();
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(
+                "已替换 " + std::to_string(old_text.size()) + " 字节为 " + std::to_string(new_text.size()) + " 字节"));
+            return result;
+        });
+
+    // execute_command - run a shell command
+    mcp_server->RegisterTool(
+        {"execute_command", "在服务器上执行 shell 命令并返回输出。可用于运行脚本、编译代码、安装包、操作 git、启动服务等。注意：命令在 WSL Ubuntu 环境中执行。",
+         {{"command", "要执行的 shell 命令", "string", true},
+          {"timeout_seconds", "超时秒数（默认 30，最大 120）", "number", false}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string cmd = args.value("command", "");
+            int timeout = args.value("timeout_seconds", 30);
+            if (timeout < 1 || timeout > 120) timeout = 30;
+            cmd += " 2>&1"; // merge stderr into stdout
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：无法执行命令"));
+                result.is_error = true; return result;
+            }
+            std::string output;
+            char buf[4096];
+            time_t start = time(nullptr);
+            while (fgets(buf, sizeof(buf), pipe)) {
+                output += buf;
+                if (output.size() > 100000) { output += "\n...（输出过长已截断）"; break; }
+                if (time(nullptr) - start > timeout) { output += "\n...（命令执行超时）"; break; }
+            }
+            int status = pclose(pipe);
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(
+                output.empty() ? "(无输出)" : output));
+            if (status != 0 && !result.is_error) {
+                // Non-zero exit code but we still got output
+            }
+            return result;
+        });
+
+    // search_files - search for text in files
+    mcp_server->RegisterTool(
+        {"search_files", "在文件或目录中搜索文本内容。支持 glob 模式匹配文件名（如 *.cpp, *.py, *）。",
+         {{"pattern", "要搜索的文本模式（支持基本正则）", "string", true},
+          {"path", "搜索路径（默认当前目录）", "string", false},
+          {"glob", "文件名过滤，如 *.cpp、*.py、*（默认所有文件）", "string", false}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string pattern = args.value("pattern", "");
+            std::string path = args.value("path", ".");
+            std::string glob = args.value("glob", "");
+            if (path.find("..") != std::string::npos) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
+            }
+            std::string cmd = "grep -rn --binary-files=without-match";
+            if (!glob.empty()) cmd += " --include='" + glob + "'";
+            cmd += " '" + pattern + "' " + path + " 2>&1 | head -200";
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：搜索失败"));
+                result.is_error = true; return result;
+            }
+            std::string output;
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), pipe)) output += buf;
+            pclose(pipe);
+            if (output.empty()) output = "(未找到匹配结果)";
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(output));
             return result;
         });
 
     // list_directory - list files in a directory
     mcp_server->RegisterTool(
-        {"list_directory", "List files in a directory",
-         {{"path", "Absolute path to the directory", "string", true}}},
+        {"list_directory", "列出目录中的文件和子目录。显示文件名、大小、修改时间。",
+         {{"path", "目录路径", "string", true}}},
         [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
             auto result = muduo_http::mcp::ToolResult{};
             std::string path = args.value("path", "");
-            if (path.find("..") != std::string::npos || path[0] != '/') {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: invalid path"));
-                result.is_error = true;
-                return result;
+            if (path.find("..") != std::string::npos) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
             }
-            std::string cmd = "ls -la " + path + " 2>&1";
+            std::string cmd = "ls -lah " + path + " 2>&1";
             FILE* pipe = popen(cmd.c_str(), "r");
             if (!pipe) {
-                result.content.push_back(
-                    muduo_http::mcp::McpProtocol::TextContent("Error: cannot list directory"));
-                result.is_error = true;
-                return result;
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：无法列出目录"));
+                result.is_error = true; return result;
             }
-            char buf[1024];
             std::string output;
+            char buf[1024];
             while (fgets(buf, sizeof(buf), pipe)) output += buf;
             pclose(pipe);
-            result.content.push_back(
-                muduo_http::mcp::McpProtocol::TextContent(output));
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(output));
+            return result;
+        });
+
+    // system_info - get system information
+    mcp_server->RegisterTool(
+        {"system_info", "获取服务器系统信息：操作系统、CPU、内存、磁盘、运行时间。",
+         {}},
+        [](const nlohmann::json&) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string info;
+            auto run = [](const char* cmd) -> std::string {
+                FILE* pipe = popen(cmd, "r"); if (!pipe) return "N/A";
+                char buf[256]; std::string r;
+                if (fgets(buf, sizeof(buf), pipe)) r = buf;
+                pclose(pipe);
+                if (!r.empty() && r.back() == '\n') r.pop_back();
+                return r;
+            };
+            info += "系统: " + run("uname -a") + "\n";
+            info += "CPU: " + run("nproc") + " 核\n";
+            info += "内存: " + run("free -h | grep Mem | awk '{print $3\"/\"$2}'") + "\n";
+            info += "磁盘: " + run("df -h / | tail -1 | awk '{print $3\"/\"$2\" (\"$5\")\"}'") + "\n";
+            info += "运行时间: " + run("uptime -p");
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(info));
             return result;
         });
 
@@ -874,13 +948,38 @@ int main(int argc, char* argv[]) {
     std::string model_name = cfg.Get("ai.model", "deepseek-v4-flash");
     std::string system_prompt =
         "你是知墨（ZhiMo），一个自建的 AI 助手。"
-        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，"
-        "也不代表任何公司。"
-        "你有访问工具的能力，可以在需要时读写文件。"
-        "可用工具：read_file（读取文件内容）、write_file（写入文件）、"
-        "list_directory（列出目录）、echo（回显消息）、system_info（查看系统信息）。"
-        "你有长期记忆能力，每次对话都会自动保存，下次可以继续。"
-        "当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
+        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n\n"
+
+        "== 工具使用规则 ==\n"
+        "你有以下工具可用，在处理用户请求时必须优先使用工具而非仅用文本回答：\n\n"
+
+        "【读写文件】\n"
+        "- read_file(path): 读取文件内容。当用户想查看代码、配置、文档时使用。\n"
+        "- write_file(path, content): 写入/覆盖文件。当用户要求创建、编辑或保存文件时使用。\n"
+        "  不得仅用文本模拟写文件，必须调用此工具完成。\n"
+        "- edit_file(path, old_text, new_text): 精确替换文件中的局部内容。"
+        "适合修改大文件中的某几行，不需要重写整个文件。使用前先 read_file 了解文件内容。\n\n"
+
+        "【文件搜索】\n"
+        "- search_files(pattern, path, glob): 在文件中搜索文本。用于查找代码中的函数定义、引用、关键词等。\n"
+        "- list_directory(path): 列出目录内容。当用户想了解项目结构时使用。\n\n"
+
+        "【命令执行】\n"
+        "- execute_command(command, timeout_seconds): 执行 shell 命令。"
+        "可用于编译、运行脚本、安装包、git 操作、启动服务等。"
+        "执行可能产生副作用的命令前要先告知用户。\n\n"
+
+        "【系统信息】\n"
+        "- system_info(): 查看操作系统、CPU、内存、磁盘等信息。\n\n"
+
+        "== 行为规范 ==\n"
+        "1. 当用户请求涉及文件操作（创建、编辑、查看、搜索），必须使用对应的文件工具，不能仅用文本模拟。\n"
+        "2. 写代码或脚本时，使用 write_file 保存到文件，让用户可以直接运行。\n"
+        "3. 需要确认项目结构时，先 list_directory 或 search_files 了解情况，再 read_file 查看具体文件。\n"
+        "4. 编译或运行代码时，使用 execute_command 执行，并把输出返回给用户。\n"
+        "5. 如果工具调用出错，向用户解释错误并尝试其他方法。\n"
+        "6. 你有长期记忆能力，每次对话都会自动保存，下次可以继续。\n"
+        "7. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
         ai_gateway, tool_executor, system_prompt
     );
