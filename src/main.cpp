@@ -686,8 +686,7 @@ int main(int argc, char* argv[]) {
             {"model", live_cfg.Get("ai.model", "gpt-3.5-turbo")},
             {"api_base", live_cfg.Get("ai.api_base", "https://api.openai.com/v1")},
             {"rate_limit_rps", live_cfg.GetInt("ai.rate_limit_rps", 10)},
-            {"cache_enabled", live_cfg.GetBool("ai.cache_enabled", true)},
-            {"workspace", live_cfg.Get("ai.workspace", ".")}
+            {"cache_enabled", live_cfg.GetBool("ai.cache_enabled", true)}
         };
         response.SetBody(j.dump(2));
     });
@@ -948,11 +947,9 @@ int main(int argc, char* argv[]) {
 
     // Create chat agent — system prompt reads model name from config
     std::string model_name = cfg.Get("ai.model", "deepseek-v4-flash");
-    std::string workspace_path = cfg.Get("ai.workspace", ".");
     std::string system_prompt =
         "你是知墨（ZhiMo），一个自建的 AI 助手。"
-        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n"
-        "当前工作目录：" + workspace_path + "。默认在此目录下操作文件。\n\n"
+        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n\n"
 
         "== 工具使用规则 ==\n"
         "你有以下工具可用，在处理用户请求时必须优先使用工具而非仅用文本回答：\n\n"
@@ -1054,32 +1051,6 @@ int main(int argc, char* argv[]) {
             j.push_back({{"name", name}, {"api_base", cfg.first}, {"model", cfg.second}});
         }
         response.SetBody(j.dump(2));
-    });
-
-    // POST /chat/stream - streaming chat (NDJSON, real-time reasoning + content)
-    server.routes().Post("/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
-                                                       muduo_http::HttpResponse&) {
-        auto writer = std::make_shared<muduo_http::StreamWriter>(
-            req.stream_conn, 200, "OK", "text/plain; charset=utf-8");
-        req.stream = writer;
-
-        try {
-            auto body = nlohmann::json::parse(req.body);
-            std::string message = body.value("message", "");
-            if (message.empty()) {
-                writer->WriteChunk(R"({"type":"error","data":"消息不能为空"})" "\n");
-                writer->End(); return;
-            }
-
-            muduo_http::AiChatRequest chat_req;
-            chat_req.messages.push_back({"user", message});
-            chat_req.stream = true;
-            ai_gateway->ChatStream(chat_req, *writer);
-        } catch (const std::exception& e) {
-            nlohmann::json err = {{"type", "error"}, {"data", std::string("parse error: ") + e.what()}};
-            writer->WriteChunk(err.dump() + "\n");
-            writer->End();
-        }
     });
 
     // POST /chat/memory - chat with long-term memory + provider switching

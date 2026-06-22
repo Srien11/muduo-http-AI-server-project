@@ -158,66 +158,29 @@ AiChatResponse AiGateway::Chat(const AiChatRequest& request) {
     return response;
 }
 
-// Context for streaming SSE write callback
-struct StreamCtx {
-    StreamWriter* writer;
-    std::string buffer;
-};
-
-static size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
-    auto* ctx = static_cast<StreamCtx*>(userp);
-    size_t total = size * nmemb;
-    ctx->buffer.append(static_cast<char*>(contents), total);
-
-    size_t pos;
-    while ((pos = ctx->buffer.find('\n')) != std::string::npos) {
-        std::string line = ctx->buffer.substr(0, pos);
-        ctx->buffer.erase(0, pos + 1);
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-
-        if (line.substr(0, 6) == "data: ") {
-            std::string data = line.substr(6);
-            if (data == "[DONE]") continue;
-            try {
-                auto json = nlohmann::json::parse(data);
-                auto& choices = json["choices"];
-                if (choices.empty()) continue;
-                auto& delta = choices[0]["delta"];
-
-                if (delta.contains("reasoning_content") && !delta["reasoning_content"].is_null()) {
-                    nlohmann::json out = {{"type", "reasoning"}, {"data", delta["reasoning_content"].get<std::string>()}};
-                    ctx->writer->WriteChunk(out.dump() + "\n");
-                }
-                if (delta.contains("content") && !delta["content"].is_null()) {
-                    nlohmann::json out = {{"type", "token"}, {"data", delta["content"].get<std::string>()}};
-                    ctx->writer->WriteChunk(out.dump() + "\n");
-                }
-            } catch (...) {}
-        }
-    }
-    return total;
-}
-
 void AiGateway::ChatStream(const AiChatRequest& request, StreamWriter& writer) {
+    // Rate limit check
     if (!rate_limiter_.Allow()) {
         writer.WriteSSE("error", "rate limit exceeded");
-        writer.End(); return;
+        writer.End();
+        return;
     }
 
-    AiChatRequest stream_req = request;
-    stream_req.stream = true;
-    std::string request_body = BuildRequestBody(stream_req);
+    std::string request_body = BuildRequestBody(request);
 
     CURL* curl = curl_easy_init();
-    if (!curl) { writer.WriteSSE("error", "failed to init curl"); writer.End(); return; }
+    if (!curl) {
+        writer.WriteSSE("error", "failed to init curl");
+        writer.End();
+        return;
+    }
 
     std::string url = config_.api_base + "/chat/completions";
+    std::string buffer;  // Accumulate partial chunks
+
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
     headers = curl_slist_append(headers, ("Authorization: Bearer " + config_.api_key).c_str());
-
-    StreamCtx ctx;
-    ctx.writer = &writer;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -226,20 +189,29 @@ void AiGateway::ChatStream(const AiChatRequest& request, StreamWriter& writer) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.timeout_seconds));
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "muduo_http_ai/0.1");
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, StreamWriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        nlohmann::json err = {{"type", "error"}, {"data", std::string("curl: ") + curl_easy_strerror(res)}};
-        writer.WriteChunk(err.dump() + "\n");
+        writer.WriteSSE("error", std::string("curl: ") + curl_easy_strerror(res));
+        writer.End();
+        return;
     }
 
-    nlohmann::json done = {{"type", "done"}, {"data", ""}};
-    writer.WriteChunk(done.dump() + "\n");
+    // Parse the buffered response and forward tokens via SSE
+    // For non-streaming fallback, send whole response at once
+    auto parsed = ParseResponse(buffer);
+    if (parsed.success) {
+        writer.WriteSSE("token", parsed.content);
+    } else {
+        writer.WriteSSE("error", parsed.error_message);
+    }
+
+    writer.WriteSSE("done", "complete");
     writer.End();
 }
 
@@ -281,7 +253,6 @@ std::string AiGateway::BuildRequestBody(const AiChatRequest& request) {
 
     body["max_tokens"] = request.max_tokens > 0 ? request.max_tokens : config_.max_tokens;
     body["temperature"] = request.temperature;
-    body["stream"] = request.stream;
 
     return body.dump();
 }
