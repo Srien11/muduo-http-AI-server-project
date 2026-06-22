@@ -1053,19 +1053,19 @@ int main(int argc, char* argv[]) {
         response.SetBody(j.dump(2));
     });
 
-    // POST /chat/stream - streaming chat (SSE, no tools, real-time reasoning + content)
+    // POST /chat/stream - streaming chat (NDJSON, real-time reasoning + content)
     server.routes().Post("/chat/stream", [ai_gateway](const muduo_http::HttpRequest& req,
                                                        muduo_http::HttpResponse&) {
         auto writer = std::make_shared<muduo_http::StreamWriter>(
-            req.stream_conn, 200, "OK", "text/event-stream");
+            req.stream_conn, 200, "OK", "text/plain; charset=utf-8");
         req.stream = writer;
 
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string message = body.value("message", "");
             if (message.empty()) {
-                writer->WriteSSE("error", "消息不能为空");
-                writer->WriteSSE("done", ""); writer->End(); return;
+                writer->WriteRaw(R"({"type":"error","data":"消息不能为空"})" "\n");
+                writer->End(); return;
             }
 
             muduo_http::AiChatRequest chat_req;
@@ -1073,8 +1073,9 @@ int main(int argc, char* argv[]) {
             chat_req.stream = true;
             ai_gateway->ChatStream(chat_req, *writer);
         } catch (const std::exception& e) {
-            writer->WriteSSE("error", std::string("parse error: ") + e.what());
-            writer->WriteSSE("done", ""); writer->End();
+            nlohmann::json err = {{"type", "error"}, {"data", std::string("parse error: ") + e.what()}};
+            writer->WriteRaw(err.dump() + "\n");
+            writer->End();
         }
     });
 

@@ -169,7 +169,6 @@ static size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, voi
     size_t total = size * nmemb;
     ctx->buffer.append(static_cast<char*>(contents), total);
 
-    // Process complete lines (SSE format: "data: {...}\n")
     size_t pos;
     while ((pos = ctx->buffer.find('\n')) != std::string::npos) {
         std::string line = ctx->buffer.substr(0, pos);
@@ -184,10 +183,15 @@ static size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, voi
                 auto& choices = json["choices"];
                 if (choices.empty()) continue;
                 auto& delta = choices[0]["delta"];
-                if (delta.contains("reasoning_content") && !delta["reasoning_content"].is_null())
-                    ctx->writer->WriteSSE("reasoning", delta["reasoning_content"].get<std::string>());
-                if (delta.contains("content") && !delta["content"].is_null())
-                    ctx->writer->WriteSSE("token", delta["content"].get<std::string>());
+
+                if (delta.contains("reasoning_content") && !delta["reasoning_content"].is_null()) {
+                    nlohmann::json out = {{"type", "reasoning"}, {"data", delta["reasoning_content"].get<std::string>()}};
+                    ctx->writer->WriteRaw(out.dump() + "\n");
+                }
+                if (delta.contains("content") && !delta["content"].is_null()) {
+                    nlohmann::json out = {{"type", "token"}, {"data", delta["content"].get<std::string>()}};
+                    ctx->writer->WriteRaw(out.dump() + "\n");
+                }
             } catch (...) {}
         }
     }
@@ -229,10 +233,13 @@ void AiGateway::ChatStream(const AiChatRequest& request, StreamWriter& writer) {
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
-    if (res != CURLE_OK)
-        writer.WriteSSE("error", std::string("curl: ") + curl_easy_strerror(res));
+    if (res != CURLE_OK) {
+        nlohmann::json err = {{"type", "error"}, {"data", std::string("curl: ") + curl_easy_strerror(res)}};
+        writer.WriteRaw(err.dump() + "\n");
+    }
 
-    writer.WriteSSE("done", "");
+    nlohmann::json done = {{"type", "done"}, {"data", ""}};
+    writer.WriteRaw(done.dump() + "\n");
     writer.End();
 }
 

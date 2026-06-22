@@ -323,7 +323,7 @@ async function sendStreamMsg() {
     var re = botDiv.querySelector('.rzn-body');
     var ce = botDiv.querySelector('.msg-content');
     re.textContent = '';
-    var curEvent = '';
+    var prevScroll = 0;
     while (true) {
       var chunk = await reader.read();
       if (chunk.done) break;
@@ -332,14 +332,14 @@ async function sendStreamMsg() {
       while ((idx = buf.indexOf('\n')) >= 0) {
         var line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
-        if (line.indexOf('event: ') === 0) { curEvent = line.slice(7).trim(); }
-        else if (line.indexOf('data: ') === 0) {
-          var data = line.slice(6);
-          if (data === '[DONE]') continue;
-          if (curEvent === 'reasoning') { re.textContent += data; log.scrollTop = log.scrollHeight; }
-          else if (curEvent === 'token') { ce.textContent += data; log.scrollTop = log.scrollHeight; }
-        }
+        if (!line) continue;
+        try {
+          var j = JSON.parse(line);
+          if (j.type === 'reasoning' && j.data) { re.textContent += j.data; }
+          else if (j.type === 'token' && j.data) { ce.textContent += j.data; }
+        } catch(e) {}
       }
+      if (ce.textContent) log.scrollTop = log.scrollHeight;
     }
     if (!ce.textContent) ce.textContent = '(完成)';
   } catch(e) { botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">请求失败</div>'; }
