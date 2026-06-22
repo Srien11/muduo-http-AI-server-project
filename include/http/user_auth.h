@@ -77,6 +77,9 @@ private:
     struct User {
         std::string password_hash;
         time_t created_at = 0;
+        std::string api_key;
+        std::string model = "deepseek-v4-flash";
+        std::string api_base = "https://api.deepseek.com/v1";
     };
     struct Session {
         std::string username;
@@ -101,6 +104,34 @@ private:
         return token;
     }
 
+    // Get/set per-user config
+    std::string GetApiKey(const std::string& username) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = users_.find(username);
+        return it != users_.end() ? it->second.api_key : "";
+    }
+    void SetUserConfig(const std::string& username, const std::string& api_key,
+                        const std::string& model, const std::string& api_base) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = users_.find(username);
+        if (it != users_.end()) {
+            it->second.api_key = api_key;
+            it->second.model = model;
+            it->second.api_base = api_base;
+            Save();
+        }
+    }
+    std::string GetUserModel(const std::string& username) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = users_.find(username);
+        return it != users_.end() ? it->second.model : "deepseek-v4-flash";
+    }
+    std::string GetUserBase(const std::string& username) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = users_.find(username);
+        return it != users_.end() ? it->second.api_base : "https://api.deepseek.com/v1";
+    }
+
     void Load() {
         std::ifstream f(db_path_);
         if (!f.is_open()) return;
@@ -110,6 +141,9 @@ private:
             User u;
             u.password_hash = val.value("password_hash", "");
             u.created_at = val.value("created_at", 0L);
+            u.api_key = val.value("api_key", "");
+            u.model = val.value("model", "deepseek-v4-flash");
+            u.api_base = val.value("api_base", "https://api.deepseek.com/v1");
             users_[key] = u;
         }
         std::ifstream sf(sess_path_);
@@ -126,7 +160,8 @@ private:
     void Save() {
         nlohmann::json j;
         for (auto& [name, u] : users_)
-            j[name] = {{"password_hash", u.password_hash}, {"created_at", u.created_at}};
+            j[name] = {{"password_hash", u.password_hash}, {"created_at", u.created_at},
+                        {"api_key", u.api_key}, {"model", u.model}, {"api_base", u.api_base}};
         std::ofstream f(db_path_);
         f << j.dump(2);
     }
