@@ -153,7 +153,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <input id="sCache" type="checkbox">
       <label style="margin:0;">启用缓存</label>
     </div>
-    <div class="field"><label>工作目录</label><input id="sWorkspace" placeholder="."></div><div class="field"><label>工作目录</label><input id="sWorkspace" placeholder="."></div><hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+    <div class="field"><label>工作目录</label><input id="sWorkspace" placeholder="."></div><hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
     <div style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">服务器状态</div>
     <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
       <div>运行时间: <span id="statUptime">-</span></div>
@@ -170,7 +170,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <script>
-var curSession = 's_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+var curSession = localStorage.getItem('zhimo_session') || 's_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
 var isLoading = false;
 var curProvider = localStorage.getItem('zhimo_provider') || 'deepseek';
 
@@ -182,7 +182,7 @@ async function loadConfig() {
     document.getElementById('sApiBase').value = d.api_base || 'https://api.deepseek.com/v1';
     document.getElementById('sRateLimit').value = d.rate_limit_rps || 10;
     document.getElementById('sCache').checked = d.cache_enabled !== false;
-    document.getElementById(sWorkspace).value = d.workspace || .;
+    document.getElementById('sWorkspace').value = d.workspace || '.';
     document.getElementById('modelBadge').textContent = d.model || '?';
     document.getElementById('keyHint').textContent = d.api_key ? '已配置' : '未配置 API Key';
   } catch(e) {}
@@ -261,10 +261,10 @@ function toggleRzn(el) {
 async function pickWorkspace() {
   try {
     var d = await window.showDirectoryPicker();
-    document.getElementById(sWorkspace).value = d.name;
+    document.getElementById('sWorkspace').value = d.name;
   } catch(e) {
-    var p = prompt("输入工作目录路径:", document.getElementById(sWorkspace).value || ".");
-    if(p) document.getElementById(sWorkspace).value = p;
+    var p = prompt("输入工作目录路径:", document.getElementById('sWorkspace').value || ".");
+    if(p) document.getElementById('sWorkspace').value = p;
   }
 }
 
@@ -290,22 +290,22 @@ async function sendMsg() {
   isLoading = true;
   document.getElementById('sendBtn').disabled = true;
   var botDiv = document.createElement('div');
-  botDiv.className = 'msg bot'; botDiv.id = 'lastBotMsg';
+  botDiv.className = 'msg bot';
   botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">思考中...</div>';
   log.appendChild(botDiv); log.scrollTop = log.scrollHeight;
   try {
     var d = await (await fetch('/chat/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:curSession,provider:curProvider})})).json();
-    var b = document.getElementById('lastBotMsg');
-    if (!b) return;
+    if (!botDiv.parentNode) return;
     if (d.response) {
       var html = '<div class="msg-av">M</div><div class="msg-bub">'+esc(d.response);
       if (d.reasoning) html += '<div class="rzn-toggle" onclick="toggleRzn(this)">&#9654; 思考过程</div><div class="rzn-body">'+esc(d.reasoning)+'</div>';
       if (d.usage || d.elapsed_ms) html += '<div class="msg-foot">'+(d.usage?'in:'+(d.usage.prompt_tokens||0)+' out:'+(d.usage.completion_tokens||0):'')+(d.elapsed_ms?' &middot; '+d.elapsed_ms+'ms':'')+'</div>';
       html += '</div>';
-      b.innerHTML = html;
+      botDiv.innerHTML = html;
       loadSessions();
-    } else if (d.error) { b.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">错误: '+esc(d.error)+'</div>'; }
-  } catch(e) { var b=document.getElementById('lastBotMsg'); if(b)b.innerHTML='<div class="msg-av">M</div><div class="msg-bub">请求失败</div>'; }
+    } else if (d.error) { botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">错误: '+esc(d.error)+'</div>'; }
+    localStorage.setItem('zhimo_session', curSession);
+  } catch(e) { if(botDiv.parentNode) botDiv.innerHTML='<div class="msg-av">M</div><div class="msg-bub">请求失败</div>'; }
   isLoading = false; document.getElementById('sendBtn').disabled = false; log.scrollTop = log.scrollHeight;
 }
 
@@ -336,6 +336,7 @@ function filterHistory() {
 }
 
 loadConfig(); loadSessions(); loadStats(); loadProviders();
+if (localStorage.getItem('zhimo_session')) loadSession(localStorage.getItem('zhimo_session'));
 setInterval(loadSessions, 5000);
 setInterval(loadStats, 10000);
 </script>
