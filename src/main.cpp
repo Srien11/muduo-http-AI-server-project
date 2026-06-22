@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -979,7 +980,9 @@ int main(int argc, char* argv[]) {
         "4. 编译或运行代码时，使用 execute_command 执行，并把输出返回给用户。\n"
         "5. 如果工具调用出错，向用户解释错误并尝试其他方法。\n"
         "6. 你有长期记忆能力，每次对话都会自动保存，下次可以继续。\n"
-        "7. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
+        "7. 回复时使用自然语言，不要用 markdown 格式包裹普通文字。"
+        "代码块可以用 ``` 标注，但普通回答不要用 markdown 标题、列表符号等。\n"
+        "8. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
         ai_gateway, tool_executor, system_prompt
     );
@@ -1032,41 +1035,74 @@ int main(int argc, char* argv[]) {
     auto memory_manager = std::make_shared<muduo_http::MemoryManager>(
         chat_agent, ai_gateway, "memory");
 
-    // POST /chat/memory - chat with long-term memory persistence
-    server.routes().Post("/chat/memory", [memory_manager, ai_gateway](const muduo_http::HttpRequest& req,
-                                                                       muduo_http::HttpResponse& response) {
-        response.SetHeader("Content-Type", "application/json");
+    // Available providers: name → {api_base, model}
+    // api_key is loaded from server.conf on each request (or set via /api/config)
+    std::map<std::string, std::pair<std::string, std::string>> providers = {
+        {"deepseek", {"https://api.deepseek.com/v1", "deepseek-v4-flash"}},
+        {"openai",   {"https://api.openai.com/v1",    "gpt-4o"}},
+    };
 
-        // Reload config from server.conf (user may have updated via settings UI)
-        muduo_http::ConfigManager live_cfg;
-        live_cfg.Load("server.conf");
-        std::string api_key = live_cfg.Get("ai.api_key", "");
-        if (!api_key.empty()) {
-            ai_gateway->SetApiKey(api_key);
-            ai_gateway->SetModel(live_cfg.Get("ai.model", "gpt-3.5-turbo"));
-            std::string base = live_cfg.Get("ai.api_base", "https://api.openai.com/v1");
-            // Auto-add /v1 if missing
-            if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
-                if (base.back() == '/') base += "v1";
-                else base += "/v1";
-            }
-            ai_gateway->SetApiBase(base);
+    // GET /api/providers - list available providers
+    server.routes().Get("/api/providers", [&providers](const muduo_http::HttpRequest&,
+                                                        muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& [name, cfg] : providers) {
+            j.push_back({{"name", name}, {"api_base", cfg.first}, {"model", cfg.second}});
         }
+        response.SetBody(j.dump(2));
+    });
+
+    // POST /chat/memory - chat with long-term memory + provider switching
+    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, &providers](const muduo_http::HttpRequest& req,
+                                                                                   muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
 
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string message = body.value("message", "");
             std::string session = body.value("session_id", "default");
+            std::string provider = body.value("provider", "deepseek");
 
             if (body.value("clear", false)) {
                 memory_manager->ClearSession(session);
-                response.SetBody(nlohmann::json({{"response", "Memory cleared."}}).dump());
+                response.SetBody(nlohmann::json({{"response", "已清除"}}).dump());
+                return;
+            }
+            if (message.empty()) {
+                response.SetBody(nlohmann::json({{"error", "消息不能为空"}}).dump());
                 return;
             }
 
-            if (message.empty()) {
-                response.SetBody(nlohmann::json({{"error", "Message required"}}).dump());
-                return;
+            // Apply selected provider config to the gateway
+            muduo_http::ConfigManager live_cfg;
+            live_cfg.Load("server.conf");
+
+            // Provider api_key: try "ai.<name>.api_key" then "ai.api_key"
+            std::string prov_key = live_cfg.Get("ai." + provider + ".api_key", "");
+            if (prov_key.empty()) prov_key = live_cfg.Get("ai.api_key", "");
+            if (!prov_key.empty()) {
+                ai_gateway->SetApiKey(prov_key);
+
+                // Model: request field > provider default > config default
+                auto it = providers.find(provider);
+                std::string model = it != providers.end() ? it->second.second : "deepseek-v4-flash";
+                std::string base = it != providers.end() ? it->second.first : "https://api.deepseek.com/v1";
+
+                // Override from request body if specified
+                if (body.contains("model")) model = body["model"].get<std::string>();
+
+                // Override from config file if stored
+                std::string cfg_model = live_cfg.Get("ai." + provider + ".model", "");
+                if (!cfg_model.empty()) model = cfg_model;
+                std::string cfg_base = live_cfg.Get("ai." + provider + ".api_base", "");
+                if (!cfg_base.empty()) base = cfg_base;
+
+                ai_gateway->SetModel(model);
+                if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
+                    if (base.back() == '/') base += "v1"; else base += "/v1";
+                }
+                ai_gateway->SetApiBase(base);
             }
 
             auto start_time = std::chrono::steady_clock::now();
@@ -1075,7 +1111,8 @@ int main(int argc, char* argv[]) {
                 std::chrono::steady_clock::now() - start_time).count();
             if (result.success) {
                 nlohmann::json resp = {{"response", result.content},
-                                       {"elapsed_ms", elapsed}};
+                                       {"elapsed_ms", elapsed},
+                                       {"provider", provider}};
                 if (!result.reasoning_content.empty())
                     resp["reasoning"] = result.reasoning_content;
                 if (result.prompt_tokens > 0 || result.completion_tokens > 0) {
