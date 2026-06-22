@@ -19,6 +19,12 @@ MemoryManager::MemoryManager(std::shared_ptr<ChatAgent> agent,
 AiChatResponse MemoryManager::Process(const std::string& user_message,
                                        const std::string& session_id) {
     std::string sid = session_id.empty() ? "default" : session_id;
+
+    // If switching to a different session, clear history to force reload
+    if (sid != agent_->session_id()) {
+        agent_->ClearHistory();
+    }
+
     agent_->set_session_id(sid);
 
     // Load long-term memory (past conversations from disk)
@@ -53,20 +59,39 @@ void MemoryManager::TrimContext() {
     int excess = static_cast<int>(history.size()) - max_context_messages_;
     if (excess <= 0) return;
 
-    // Find a safe cut point: don't orphan "tool" messages without
-    // their preceding "assistant" message with tool_calls
-    int cut = excess;
-    for (int i = excess; i < static_cast<int>(history.size()); i++) {
-        if (history[i].role == "tool") {
-            // This tool message would lose its predecessor;
-            // extend the cut backwards to include the matching
-            // assistant(tool_calls) message
-            for (int j = i - 1; j >= 0; j--) {
-                if (history[j].role == "assistant" && !history[j].tool_calls.is_null()) {
-                    if (j < cut) cut = j;
-                    break;
-                }
-                if (history[j].role != "tool") break; // not part of a tool chain
+    // Walk forward from the start, counting messages to remove.
+    // When we hit an assistant(tool_calls), skip the whole group
+    // (assistant + following tool messages) — never split them.
+    int cut = 0;
+    int removed = 0;
+    int n = static_cast<int>(history.size());
+    while (cut < n && removed < excess) {
+        // assistant(tool_calls) + following tool messages = indivisible group
+        if (history[cut].role == "assistant" && !history[cut].tool_calls.is_null()) {
+            // Find end of the tool message block
+            int group_end = cut + 1;
+            while (group_end < n && history[group_end].role == "tool") {
+                group_end++;
+            }
+            int group_size = group_end - cut;
+            // Only remove the whole group if it fits entirely within excess
+            if (removed + group_size <= excess) {
+                removed += group_size;
+                cut = group_end;
+            } else {
+                break;  // Can't split — stop trimming
+            }
+        } else {
+            // Regular message (user, assistant without tool_calls, system, tool...)
+            // Actually "tool" here shouldn't happen since they're handled above,
+            // but just in case, count them
+            if (history[cut].role == "tool") {
+                // Orphaned tool message — should not happen, skip it
+                cut++;
+                removed++;
+            } else {
+                cut++;
+                removed++;
             }
         }
     }

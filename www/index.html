@@ -178,7 +178,7 @@ async function loadSessions() {
     list.forEach(s => {
       const d = document.createElement('div');
       d.className = 'history-item' + (curSession === s.id ? ' active' : '');
-      d.innerHTML = '<span class="preview">' + esc(s.preview || s.id.slice(0,12)) + '</span><button class="del" onclick="event.stopPropagation();delSession(\''+s.id+'\')">x</button>';
+      d.innerHTML = '<span class="preview">' + esc(s.preview || '会话' + s.id.slice(0,6)) + '</span><button class="del" onclick="event.stopPropagation();delSession(\''+s.id+'\')">x</button>';
       d.onclick = () => loadSession(s.id);
       el.appendChild(d);
     });
