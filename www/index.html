@@ -154,7 +154,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
       <input id="sCache" type="checkbox">
       <label style="margin:0;">启用缓存</label>
     </div>
-    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+    <div class="field"><label>工作目录</label><input id="sWorkspace" placeholder="."></div><div class="field"><label>工作目录</label><input id="sWorkspace" placeholder="."></div><hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
     <div style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">服务器状态</div>
     <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
       <div>运行时间: <span id="statUptime">-</span></div>
@@ -183,6 +183,7 @@ async function loadConfig() {
     document.getElementById('sApiBase').value = d.api_base || 'https://api.deepseek.com/v1';
     document.getElementById('sRateLimit').value = d.rate_limit_rps || 10;
     document.getElementById('sCache').checked = d.cache_enabled !== false;
+    document.getElementById(sWorkspace).value = d.workspace || .;
     document.getElementById('modelBadge').textContent = d.model || '?';
     document.getElementById('keyHint').textContent = d.api_key ? '已配置' : '未配置 API Key';
   } catch(e) {}
@@ -241,7 +242,7 @@ async function saveSettings() {
       model: document.getElementById('sModel').value,
       api_base: document.getElementById('sApiBase').value,
       rate_limit_rps: parseInt(document.getElementById('sRateLimit').value)||10,
-      cache_enabled: document.getElementById('sCache').checked
+      cache_enabled: document.getElementById('sCache').checked,      workspace: document.getElementById('sWorkspace').value
     })});
     loadConfig(); closeSettings();
   } catch(e) { alert('保存失败'); }
@@ -255,6 +256,16 @@ function toggleRzn(el) {
   if (body && body.className.indexOf('rzn-body')>=0) {
     body.classList.toggle('open');
     el.textContent = body.classList.contains('open') ? '▼ 思考过程' : '▶ 思考过程';
+  }
+}
+
+async function pickWorkspace() {
+  try {
+    var d = await window.showDirectoryPicker();
+    document.getElementById(sWorkspace).value = d.name;
+  } catch(e) {
+    var p = prompt("输入工作目录路径:", document.getElementById(sWorkspace).value || ".");
+    if(p) document.getElementById(sWorkspace).value = p;
   }
 }
 
