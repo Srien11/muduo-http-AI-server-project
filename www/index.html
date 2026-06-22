@@ -270,6 +270,8 @@ function toggleRzn(el) {
   if (body && body.className.indexOf('rzn-body')>=0) {
     body.classList.toggle('open');
     el.textContent = body.classList.contains('open') ? '▼ 思考过程' : '▶ 思考过程';
+    var log = document.getElementById("chatLog");
+    log.scrollTop = log.scrollHeight;
   }
 }
 
@@ -311,7 +313,7 @@ async function sendMsg() {
         html += '</div>';
       }
       html += '</div>';
-      lastBot.innerHTML = html;
+      lastBot.innerHTML = html; log.scrollTop = log.scrollHeight;
       loadSessions();
     } else if (d.error) {
       lastBot.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">错误: '+esc(d.error)+'</div>';
