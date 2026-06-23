@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <memory>
 #include <chrono>
+#include <unordered_map>
 
 #include "muduo/net/TcpServer.h"
 #include "muduo/net/EventLoop.h"
@@ -76,6 +77,9 @@ private:
     std::atomic<int> active_connections_{0};
     std::atomic<double> total_response_time_ms_{0};
     std::time_t start_time_{std::time(nullptr)};
+
+    // Partial request accumulation (TCP fragmentation)
+    std::unordered_map<void*, std::string> partial_requests_;
 };
 
 } // namespace muduo_http

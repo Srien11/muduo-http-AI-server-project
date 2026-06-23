@@ -59,9 +59,17 @@ void HttpServer::onConnection(const muduo::net::TcpConnectionPtr& conn) {
 void HttpServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
                            muduo::net::Buffer* buf,
                            muduo::Timestamp) {
-    const std::string raw_request(buf->retrieveAllAsString());
+    std::string new_data(buf->retrieveAllAsString());
+
+    // Append to partial buffer if previous request was incomplete
+    auto& acc = partial_requests_[conn.get()];
+    acc += new_data;
+
     request_count_++;
-    handleRequest(conn, raw_request);
+    handleRequest(conn, acc);
+
+    // If request was fully processed, clear the buffer
+    // (handler sets stream flag for async, ParseResult::kIncomplete for partial)
 }
 
 void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
@@ -70,6 +78,10 @@ void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
     HttpResponse response;
 
     if (!context.ParseRequest(raw_request)) {
+        // Check if request is incomplete — wait for more data
+        if (context.result() == ParseResult::kIncomplete) {
+            return;  // Keep data in partial_requests_, wait for next onMessage
+        }
         // Map ParseResult to HTTP status code
         switch (context.result()) {
             case ParseResult::kMethodNotAllowed:
@@ -107,6 +119,8 @@ void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
 
     // --- If handler activated streaming mode, skip normal response ---
     if (context.request().stream) {
+        // Clear partial buffer for this connection (streaming handled elsewhere)
+        partial_requests_.erase(conn.get());
         return;
     }
 
@@ -121,6 +135,9 @@ void HttpServer::handleRequest(const muduo::net::TcpConnectionPtr& conn,
     if (close) {
         conn->shutdown();
     }
+
+    // Clear partial buffer after successful response
+    partial_requests_.erase(conn.get());
 }
 
 bool HttpServer::shouldClose(const HttpRequest& req) const {

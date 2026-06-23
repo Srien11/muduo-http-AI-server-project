@@ -171,7 +171,7 @@ bool HttpContext::ParseRequest(const std::string& raw_request) {
         const size_t bytes_available = raw_request.size() - body_offset;
 
         if (bytes_available < content_length) {
-            result_ = ParseResult::kBadRequest;
+            result_ = ParseResult::kIncomplete;
             return false;
         }
 

@@ -13,6 +13,7 @@ enum class ParseResult {
     kEntityTooLarge,
     kVersionNotSupported,
     kHeaderTooLarge,
+    kIncomplete,   // Body not yet fully received
 };
 
 class HttpContext {

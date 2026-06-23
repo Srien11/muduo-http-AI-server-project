@@ -1660,12 +1660,18 @@ int main(int argc, char* argv[]) {
             return;
         }
 
-        // Capture connection for async response
+        // Capture writer and connection for async response
+        auto writer = req.stream;
         auto conn = req.stream_conn;
 
         // Post blocking work to thread pool
-        worker_pool.run([memory_manager, ai_gateway, user_manager, message, session, provider, &providers, loop, conn, auth_phone]() {
+        worker_pool.run([memory_manager, ai_gateway, user_manager, message, session, provider, &providers, loop, writer, auth_phone]() {
             // ---- This runs on a worker thread ----
+            // Lock shared state — only one AI request at a time (prevents race)
+            static std::mutex worker_lock;
+            std::lock_guard<std::mutex> guard(worker_lock);
+
+            // Apply provider config to gateway
 
             // Apply provider config to gateway
             std::string prov_key;
@@ -1730,14 +1736,10 @@ int main(int argc, char* argv[]) {
             std::string json = resp.dump();
             int status = result.success ? 200 : 502;
 
-            // Send response back on IO thread
-            loop->runInLoop([conn, json, status]() {
-                std::ostringstream h;
-                h << "HTTP/1.1 " << status << " " << (status == 200 ? "OK" : "Bad Gateway")
-                  << "\r\nContent-Type: application/json\r\nContent-Length: "
-                  << json.size() << "\r\nConnection: close\r\n\r\n" << json;
-                conn->send(h.str());
-                conn->shutdown();
+            // Send via StreamWriter (proper chunked→flush→shutdown)
+            loop->runInLoop([writer, json]() {
+                writer->WriteChunk(json);
+                writer->End();
             });
         });
     });
