@@ -29,6 +29,7 @@
 #include "http/multipart_parser.h"
 #include "http/static_file_handler.h"
 #include "http/stream_writer.h"
+#include "http/user_manager.h"
 
 int main(int argc, char* argv[]) {
     // Load config
@@ -55,6 +56,19 @@ int main(int argc, char* argv[]) {
     log.SetConsole(true);
 
     LOG_INFO("server starting...");
+
+    // User manager (phone registration + auth)
+    auto user_manager = std::make_shared<muduo_http::UserManager>("users");
+    if (cfg.Has("sms.access_key_id")) {
+        user_manager->SetSmsConfig(
+            cfg.Get("sms.access_key_id", ""),
+            cfg.Get("sms.access_key_secret", ""),
+            cfg.Get("sms.sign_name", ""),
+            cfg.Get("sms.template_code", ""));
+        if (user_manager->SmsConfigured()) {
+            LOG_INFO("sms service configured");
+        }
+    }
 
     // Auth password (empty = no auth required)
     std::string auth_password = cfg.Get("auth.password", "");
@@ -547,7 +561,8 @@ int main(int argc, char* argv[]) {
             }
 
             // Use curl to fetch HTML from DuckDuckGo lite (no API key required)
-            std::string cmd = "curl -sL -A 'Mozilla/5.0' --max-time 15 "
+            // --noproxy ignores system proxy env vars (HTTPS_PROXY, etc.)
+            std::string cmd = "curl -sL -A 'Mozilla/5.0' --max-time 15 --noproxy '*' "
                 "--data-urlencode 'q=" + safe_query + "' 'https://lite.duckduckgo.com/lite/' 2>&1";
 
             FILE* pipe = popen(cmd.c_str(), "r");
@@ -837,6 +852,152 @@ int main(int argc, char* argv[]) {
         response.SetBody(resp);
     });
 
+    // ----- Auth routes (phone + SMS) -----
+    server.routes().Post("/api/sms/send", [user_manager](const muduo_http::HttpRequest& req,
+                                                          muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string phone = body.value("phone", "");
+            if (phone.empty()) {
+                response.SetBody(nlohmann::json({{"error", "手机号不能为空"}}).dump());
+                return;
+            }
+            std::string err;
+            if (user_manager->SendSmsCode(phone, err)) {
+                response.SetBody(nlohmann::json({{"status", "ok"}}).dump());
+            } else {
+                response.SetStatusCode(400);
+                response.SetBody(nlohmann::json({{"error", err}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    server.routes().Post("/api/auth/register", [user_manager](const muduo_http::HttpRequest& req,
+                                                                muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string phone = body.value("phone", "");
+            std::string code = body.value("code", "");
+            std::string password = body.value("password", "");
+            if (phone.empty() || code.empty() || password.empty()) {
+                response.SetBody(nlohmann::json({{"error", "手机号、验证码、密码不能为空"}}).dump());
+                return;
+            }
+            std::string err;
+            if (user_manager->Register(phone, code, password, err)) {
+                // Auto-login after register
+                std::string token;
+                user_manager->Login(phone, password, token, err);
+                response.SetBody(nlohmann::json({{"status", "ok"}, {"token", token}}).dump());
+            } else {
+                response.SetStatusCode(400);
+                response.SetBody(nlohmann::json({{"error", err}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    server.routes().Post("/api/auth/login", [user_manager](const muduo_http::HttpRequest& req,
+                                                            muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string phone = body.value("phone", "");
+            std::string password = body.value("password", "");
+            if (phone.empty() || password.empty()) {
+                response.SetBody(nlohmann::json({{"error", "手机号和密码不能为空"}}).dump());
+                return;
+            }
+            std::string token, err;
+            if (user_manager->Login(phone, password, token, err)) {
+                response.SetBody(nlohmann::json({{"status", "ok"}, {"token", token}}).dump());
+            } else {
+                response.SetStatusCode(401);
+                response.SetBody(nlohmann::json({{"error", err}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
+    // Helper: extract user from Authorization header
+    auto resolve_user = [user_manager](const muduo_http::HttpRequest& req,
+                                        muduo_http::HttpResponse& response,
+                                        std::string& phone) -> bool {
+        auto it = req.headers.find("Authorization");
+        if (it == req.headers.end()) {
+            response.SetStatusCode(401);
+            response.SetBody(nlohmann::json({{"error", "请先登录"}}).dump());
+            response.SetHeader("Content-Type", "application/json");
+            return false;
+        }
+        std::string token = it->second;
+        // Strip "Bearer " prefix
+        if (token.size() > 7 && token.substr(0, 7) == "Bearer ") {
+            token = token.substr(7);
+        }
+        if (!user_manager->VerifyToken(token, phone)) {
+            response.SetStatusCode(401);
+            response.SetBody(nlohmann::json({{"error", "登录已过期，请重新登录"}}).dump());
+            response.SetHeader("Content-Type", "application/json");
+            return false;
+        }
+        return true;
+    };
+
+    // ----- User Settings (per-user API key, model, etc.) -----
+    server.routes().Get("/api/user/config", [user_manager, &resolve_user](const muduo_http::HttpRequest& req,
+                                                                            muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        std::string phone;
+        if (!resolve_user(req, response, phone)) return;
+
+        muduo_http::UserInfo user;
+        if (user_manager->GetUser(phone, user)) {
+            nlohmann::json j = {
+                {"api_key", user.api_key},
+                {"model", user.model},
+                {"api_base", user.api_base}
+            };
+            response.SetBody(j.dump(2));
+        } else {
+            response.SetStatusCode(500);
+            response.SetBody(nlohmann::json({{"error", "获取用户信息失败"}}).dump());
+        }
+    });
+
+    server.routes().Post("/api/user/config", [user_manager, &resolve_user](const muduo_http::HttpRequest& req,
+                                                                             muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
+        std::string phone;
+        if (!resolve_user(req, response, phone)) return;
+
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string api_key = body.value("api_key", "");
+            std::string model = body.value("model", "");
+            std::string api_base = body.value("api_base", "");
+
+            if (user_manager->UpdateUser(phone, api_key, model, api_base)) {
+                response.SetBody(nlohmann::json({{"status", "saved"}}).dump());
+            } else {
+                response.SetStatusCode(500);
+                response.SetBody(nlohmann::json({{"error", "保存失败"}}).dump());
+            }
+        } catch (const std::exception& e) {
+            response.SetStatusCode(400);
+            response.SetBody(nlohmann::json({{"error", e.what()}}).dump());
+        }
+    });
+
     // ----- API Stats -----
     server.routes().Get("/api/stats", [&server](const muduo_http::HttpRequest&,
                                                  muduo_http::HttpResponse& response) {
@@ -982,9 +1143,19 @@ int main(int argc, char* argv[]) {
     });
 
     // ----- Chat Sessions -----
-    server.routes().Get("/api/sessions", [](const muduo_http::HttpRequest&,
-                                             muduo_http::HttpResponse& response) {
+    server.routes().Get("/api/sessions", [user_manager](const muduo_http::HttpRequest& req,
+                                                         muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
+
+        // Resolve user from auth token
+        std::string auth_phone;
+        auto hit = req.headers.find("Authorization");
+        if (hit != req.headers.end()) {
+            std::string token = hit->second;
+            if (token.size() > 7 && token.substr(0, 7) == "Bearer ")
+                user_manager->VerifyToken(token.substr(7), auth_phone);
+        }
+
         nlohmann::json sessions = nlohmann::json::array();
         DIR* dir = opendir("memory");
         if (dir) {
@@ -994,7 +1165,10 @@ int main(int argc, char* argv[]) {
                 if (name.size() > 5 && name.substr(name.size() - 5) == ".json" &&
                     name.substr(0, 5) == "chat_") {
                     std::string sid = name.substr(5, name.size() - 10);
-                    // Read first user message as preview
+
+                    // If authenticated, only show this user's sessions
+                    if (!auth_phone.empty() && sid.find(auth_phone + "_") != 0) continue;
+
                     std::string preview = sid.substr(0, 12);
                     try {
                         std::ifstream f(std::string("memory/") + name);
@@ -1018,10 +1192,26 @@ int main(int argc, char* argv[]) {
     });
 
     // GET /api/sessions/:id/messages - return full history for a session
-    server.routes().Get("/api/sessions/:id/messages", [](const muduo_http::HttpRequest& req,
-                                                          muduo_http::HttpResponse& response) {
+    server.routes().Get("/api/sessions/:id/messages", [user_manager](const muduo_http::HttpRequest& req,
+                                                                      muduo_http::HttpResponse& response) {
         response.SetHeader("Content-Type", "application/json");
         std::string sid = req.path_params.at("id");
+
+        // If authenticated, verify this session belongs to the user
+        auto hit = req.headers.find("Authorization");
+        if (hit != req.headers.end()) {
+            std::string token = hit->second;
+            if (token.size() > 7 && token.substr(0, 7) == "Bearer ") {
+                std::string auth_phone;
+                if (user_manager->VerifyToken(token.substr(7), auth_phone)) {
+                    if (sid.find(auth_phone + "_") != 0) {
+                        response.SetBody(nlohmann::json({{"error", "无权限"}}).dump());
+                        return;
+                    }
+                }
+            }
+        }
+
         std::string path = "memory/chat_" + sid + ".json";
         std::ifstream f(path);
         if (!f.is_open()) {
@@ -1251,12 +1441,11 @@ int main(int argc, char* argv[]) {
     auto* loop = server.get_loop();
 
     // POST /chat/memory - async chat with long-term memory + provider switching
-    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, &providers, &worker_pool, loop]
+    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, user_manager, &providers, &worker_pool, loop]
     (const muduo_http::HttpRequest& req, muduo_http::HttpResponse&) {
         // Parse request on IO thread
         nlohmann::json body;
         try { body = nlohmann::json::parse(req.body); } catch (...) {
-            // Send parse error synchronously
             std::string err = nlohmann::json({{"error", "JSON parse error"}}).dump();
             std::ostringstream h;
             h << "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: "
@@ -1273,6 +1462,21 @@ int main(int argc, char* argv[]) {
         std::string message = body.value("message", "");
         std::string session = body.value("session_id", "default");
         std::string provider = body.value("provider", "deepseek");
+
+        // Resolve user from auth token
+        std::string auth_phone;
+        std::string auth_header;
+        auto hit = req.headers.find("Authorization");
+        if (hit != req.headers.end()) {
+            auth_header = hit->second;
+            if (auth_header.size() > 7 && auth_header.substr(0, 7) == "Bearer ")
+                user_manager->VerifyToken(auth_header.substr(7), auth_phone);
+        }
+
+        // If authenticated, namespace session by user
+        if (!auth_phone.empty()) {
+            session = auth_phone + "_" + session;
+        }
 
         if (body.value("clear", false)) {
             memory_manager->ClearSession(session);
@@ -1300,23 +1504,42 @@ int main(int argc, char* argv[]) {
         auto conn = req.stream_conn;
 
         // Post blocking work to thread pool
-        worker_pool.run([memory_manager, ai_gateway, message, session, provider, &providers, loop, conn]() {
+        worker_pool.run([memory_manager, ai_gateway, user_manager, message, session, provider, &providers, loop, conn, auth_phone]() {
             // ---- This runs on a worker thread ----
 
             // Apply provider config to gateway
-            muduo_http::ConfigManager live_cfg;
-            live_cfg.Load("server.conf");
-            std::string prov_key = live_cfg.Get("ai." + provider + ".api_key", "");
-            if (prov_key.empty()) prov_key = live_cfg.Get("ai.api_key", "");
+            std::string prov_key;
+            std::string model;
+            std::string base;
+
+            // If user is authenticated, use their API key from their account
+            if (!auth_phone.empty()) {
+                muduo_http::UserInfo user;
+                if (user_manager->GetUser(auth_phone, user)) {
+                    prov_key = user.api_key;
+                    model = user.model;
+                    base = user.api_base;
+                }
+            }
+
+            // Fall back to server.conf
+            if (prov_key.empty()) {
+                muduo_http::ConfigManager live_cfg;
+                live_cfg.Load("server.conf");
+                prov_key = live_cfg.Get("ai." + provider + ".api_key", "");
+                if (prov_key.empty()) prov_key = live_cfg.Get("ai.api_key", "");
+            }
+            if (model.empty()) {
+                auto it = providers.find(provider);
+                model = it != providers.end() ? it->second.second : "deepseek-v4-flash";
+            }
+            if (base.empty()) {
+                auto it = providers.find(provider);
+                base = it != providers.end() ? it->second.first : "https://api.deepseek.com/v1";
+            }
+
             if (!prov_key.empty()) {
                 ai_gateway->SetApiKey(prov_key);
-                auto it = providers.find(provider);
-                std::string model = it != providers.end() ? it->second.second : "deepseek-v4-flash";
-                std::string base = it != providers.end() ? it->second.first : "https://api.deepseek.com/v1";
-                std::string cfg_model = live_cfg.Get("ai." + provider + ".model", "");
-                if (!cfg_model.empty()) model = cfg_model;
-                std::string cfg_base = live_cfg.Get("ai." + provider + ".api_base", "");
-                if (!cfg_base.empty()) base = cfg_base;
                 ai_gateway->SetModel(model);
                 if (base.find("/v1") == std::string::npos && base.find("localhost") == std::string::npos) {
                     if (base.back() == '/') base += "v1"; else base += "/v1";
