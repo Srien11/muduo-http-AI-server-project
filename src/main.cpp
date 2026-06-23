@@ -784,6 +784,153 @@ int main(int argc, char* argv[]) {
             return result;
         });
 
+    // web_fetch - fetch and parse web page content
+    mcp_server->RegisterTool(
+        {"web_fetch", "抓取网页内容并提取纯文本。用于查看网页、阅读文章、检查链接。不能处理需要登录的页面。",
+         {{"url", "网页地址，以 http:// 或 https:// 开头", "string", true},
+          {"max_chars", "最大返回字符数（默认5000，用于控制上下文）", "number", false}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string url = args.value("url", "");
+            int max_chars = args.value("max_chars", 5000);
+            if (max_chars < 100) max_chars = 100;
+            if (max_chars > 50000) max_chars = 50000;
+
+            if (url.find("http") != 0) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：URL 必须以 http:// 或 https:// 开头"));
+                result.is_error = true; return result;
+            }
+
+            // Use curl to fetch the page
+            std::string cmd = "curl -sL --max-time 15 --noproxy '*' -A 'Mozilla/5.0 (compatible; ZhiMo/1.0)' '" + url + "' 2>&1";
+
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：网络请求失败"));
+                result.is_error = true; return result;
+            }
+
+            std::string html;
+            char buf[8192];
+            while (fgets(buf, sizeof(buf), pipe)) html += buf;
+            (void)pclose(pipe);
+
+            if (html.empty()) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("请求返回空内容"));
+                return result;
+            }
+
+            // Simple HTML-to-text: strip tags, collapse whitespace
+            std::string text;
+            bool in_tag = false, in_script = false, in_style = false;
+            bool prev_was_space = false;
+            size_t script_depth = 0, style_depth = 0;
+            for (size_t i = 0; i < html.size() && text.size() < static_cast<size_t>(max_chars); i++) {
+                char c = html[i];
+                if (c == '<') {
+                    // Check for script/style tags
+                    if (i + 7 < html.size() && html.compare(i + 1, 6, "script") == 0) { in_script = true; script_depth++; }
+                    else if (i + 6 < html.size() && html.compare(i + 1, 5, "style") == 0) { in_style = true; style_depth++; }
+                    else { in_tag = true; }
+                    continue;
+                }
+                if (in_script) {
+                    if (c == '<' && i + 8 < html.size() && html.compare(i, 8, "</script") == 0) { script_depth--; if (script_depth == 0) in_script = false; }
+                    continue;
+                }
+                if (in_style) {
+                    if (c == '<' && i + 7 < html.size() && html.compare(i, 7, "</style") == 0) { style_depth--; if (style_depth == 0) in_style = false; }
+                    continue;
+                }
+                if (in_tag) {
+                    if (c == '>') { in_tag = false; if (!text.empty() && text.back() != '\n') { text += ' '; prev_was_space = true; } }
+                    continue;
+                }
+                if (c == '&') {
+                    size_t semi = html.find(';', i);
+                    if (semi != std::string::npos && semi - i < 10) {
+                        std::string entity = html.substr(i, semi - i + 1);
+                        if (entity == "&amp;") text += '&';
+                        else if (entity == "&lt;") text += '<';
+                        else if (entity == "&gt;") text += '>';
+                        else if (entity == "&quot;") text += '"';
+                        else if (entity == "&#x27;" || entity == "&#39;") text += '\'';
+                        else if (entity == "&nbsp;") text += ' ';
+                        i = semi;
+                        continue;
+                    }
+                }
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                    if (!prev_was_space && !text.empty()) { text += ' '; prev_was_space = true; }
+                    continue;
+                }
+                text += c;
+                prev_was_space = false;
+            }
+
+            if (text.empty()) text = "(无法提取有效文本内容)";
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(text));
+            return result;
+        });
+
+    // glob - find files by pattern
+    mcp_server->RegisterTool(
+        {"glob", "按文件模式匹配搜索文件。支持通配符，如 '**/*.cpp'（递归搜索所有cpp）、'src/**/*.h'（src下所有h文件）、'*.txt'（当前目录txt）。",
+         {{"pattern", "文件匹配模式，使用 glob 语法", "string", true},
+          {"path", "搜索的起始目录（默认当前工作目录）", "string", false}}},
+        [](const nlohmann::json& args) -> muduo_http::mcp::ToolResult {
+            auto result = muduo_http::mcp::ToolResult{};
+            std::string pattern = args.value("pattern", "");
+            std::string path = args.value("path", ".");
+            if (pattern.empty()) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：请提供文件匹配模式"));
+                result.is_error = true; return result;
+            }
+            if (path.find("..") != std::string::npos) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：路径不能包含 .."));
+                result.is_error = true; return result;
+            }
+
+            // Escape single quotes in pattern and path for shell
+            auto shell_escape = [](const std::string& s) -> std::string {
+                std::string out;
+                for (char c : s) {
+                    if (c == '\'') out += "'\\''";
+                    else out += c;
+                }
+                return out;
+            };
+
+            // Use find + grep for pattern matching
+            std::string cmd;
+            if (pattern.find("**") != std::string::npos) {
+                // Recursive: replace ** with *
+                std::string p = pattern;
+                size_t pp;
+                while ((pp = p.find("**")) != std::string::npos) {
+                    p.replace(pp, 2, "*");
+                }
+                cmd = "cd '" + shell_escape(path) + "' && find . -path './" + shell_escape(p) + "' -type f 2>/dev/null | head -200";
+            } else {
+                cmd = "find '" + shell_escape(path) + "' -path '" + shell_escape(path + "/" + pattern) + "' -type f 2>/dev/null | head -200";
+            }
+
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                result.content.push_back(muduo_http::mcp::McpProtocol::TextContent("错误：搜索失败"));
+                result.is_error = true; return result;
+            }
+
+            std::string output;
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), pipe)) output += buf;
+            pclose(pipe);
+
+            if (output.empty()) output = "(未找到匹配文件)";
+            result.content.push_back(muduo_http::mcp::McpProtocol::TextContent(output));
+            return result;
+        });
+
     // Mount MCP server routes to HTTP server
     // GET /mcp - SSE stream (for persistent MCP connections)
     server.routes().Get("/mcp", [mcp_server](const muduo_http::HttpRequest& req,
@@ -1221,11 +1368,18 @@ int main(int argc, char* argv[]) {
         try {
             nlohmann::json hist;
             f >> hist;
-            // Return only user + assistant messages (skip system)
+            // Return only user + assistant messages (skip tool/system, skip empty tool-call turns)
             nlohmann::json msgs = nlohmann::json::array();
             for (auto& msg : hist) {
-                if (msg["role"] == "user" || msg["role"] == "assistant") {
-                    msgs.push_back({{"role", msg["role"]}, {"content", msg.value("content", "")}});
+                std::string role = msg["role"];
+                if (role == "user") {
+                    msgs.push_back({{"role", "user"}, {"content", msg.value("content", "")}});
+                } else if (role == "assistant") {
+                    std::string c = msg.value("content", "");
+                    // Skip tool-call-only turns (no spoken content)
+                    if (c.empty() && msg.contains("tool_calls") && !msg["tool_calls"].is_null())
+                        continue;
+                    msgs.push_back({{"role", "assistant"}, {"content", c}});
                 }
             }
             response.SetBody(msgs.dump(2));
@@ -1349,7 +1503,12 @@ int main(int argc, char* argv[]) {
         "【网络搜索】\n"
         "- search_web(query, count): 在互联网上搜索信息。"
         "当用户问到新闻、实时数据、你不知道的内容时使用。"
-        "返回搜索结果的标题、链接和摘要。\n\n"
+        "返回搜索结果的标题、链接和摘要。\n"
+        "- web_fetch(url, max_chars): 抓取网页内容并提取纯文本。"
+        "用于查看具体网页、阅读文章内容、获取详细信息。\n\n"
+
+        "【文件查找】\n"
+        "- glob(pattern, path): 按文件名模式匹配查找文件。如 '**/*.cpp' 查找所有cpp文件。\n\n"
 
         "【系统信息】\n"
         "- system_info(): 查看操作系统、CPU、内存、磁盘等信息。\n\n"
@@ -1365,7 +1524,8 @@ int main(int argc, char* argv[]) {
         "不允许使用 **、*、#、- 等 markdown 标记符号。"
         "如果用户问的是列表，用换行和数字/短横即可。"
         "代码可以用 ``` 标注，但普通回答禁止任何 markdown 格式。\n"
-        "8. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。";
+        "8. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。\n"
+        "9. 上网搜索、查网页必须用 search_web 或 web_fetch 工具，禁止用 execute_command 手动调 curl。\n";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
         ai_gateway, tool_executor, system_prompt
     );
@@ -1473,8 +1633,8 @@ int main(int argc, char* argv[]) {
                 user_manager->VerifyToken(auth_header.substr(7), auth_phone);
         }
 
-        // If authenticated, namespace session by user
-        if (!auth_phone.empty()) {
+        // If authenticated, namespace session by user (once)
+        if (!auth_phone.empty() && session.find(auth_phone + "_") != 0) {
             session = auth_phone + "_" + session;
         }
 

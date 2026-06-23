@@ -209,7 +209,9 @@ async function authFetch(url, opts) {
   if (!opts) opts = {};
   if (!opts.headers) opts.headers = authHeaders();
   else Object.assign(opts.headers, authHeaders());
-  return fetch(url, opts);
+  var res = await fetch(url, opts);
+  if (res.status === 401) { authToken = null; localStorage.removeItem('zhimo_token'); location.reload(); throw new Error('auth'); }
+  return res;
 }
 
 function switchAuthTab(mode) {
@@ -282,10 +284,10 @@ async function submitAuth() {
 }
 
 function logout() {
+  if (!confirm('确认退出登录？')) return;
   authToken = null;
   localStorage.removeItem('zhimo_token');
-  document.getElementById('authOverlay').classList.add('show');
-  document.getElementById('chatLog').innerHTML = '';
+  location.reload();
 }
 
 // Check auth on load
@@ -441,9 +443,9 @@ async function loadSession(id) {
   var log = document.getElementById('chatLog');
   log.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">加载中...</div>';
   try {
-    var msgs = await (await fetch('/api/sessions/'+encodeURIComponent(id)+'/messages')).json();
+    var msgs = await (await (authToken ? authFetch('/api/sessions/'+encodeURIComponent(id)+'/messages') : fetch('/api/sessions/'+encodeURIComponent(id)+'/messages'))).json();
     log.innerHTML = '';
-    msgs.forEach(function(m){ var u=m.role==='user'; log.insertAdjacentHTML('beforeend','<div class="msg '+(u?'user':'bot')+'"><div class="msg-av">'+(u?'U':'M')+'</div><div class="msg-bub">'+esc(m.content)+'</div></div>'); });
+    msgs.forEach(function(m){ log.insertAdjacentHTML('beforeend','<div class="msg '+(m.role==='user'?'user':'bot')+'"><div class="msg-av">'+(m.role==='user'?'U':'M')+'</div><div class="msg-bub">'+esc(m.content||'')+'</div></div>'); });
     if (!msgs.length) log.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">空对话</div>';
   } catch(e) { log.innerHTML = '<div class="msg bot"><div class="msg-av">M</div><div class="msg-bub">无法加载历史</div></div>'; }
   log.scrollTop = log.scrollHeight;
