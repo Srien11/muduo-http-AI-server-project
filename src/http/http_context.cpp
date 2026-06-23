@@ -11,7 +11,7 @@ namespace muduo_http {
 namespace {
 
 constexpr size_t kMaxHeaderSize = 8192;       // 8KB
-constexpr size_t kMaxBodySize = 1024 * 1024;  // 1MB
+constexpr size_t kMaxBodySize = 10485760;  // 10MB
 constexpr size_t kMaxRequestLineSize = 4096;  // 4KB
 
 const std::unordered_set<std::string>& KnownMethods() {

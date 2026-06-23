@@ -8,6 +8,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <muduo/base/ThreadPool.h>
 
@@ -80,7 +82,7 @@ int main(int argc, char* argv[]) {
 
     muduo_http::HttpServer server(port);
     server.set_thread_num(threads);
-    server.set_max_body_size(static_cast<size_t>(cfg.GetInt("server.max_body_size", 1048576)));
+    server.set_max_body_size(static_cast<size_t>(cfg.GetInt("server.max_body_size", 52428800)));
 
     // Session middleware is registered automatically by HttpServer
     server.Use(muduo_http::CreateLoggingMiddleware());
@@ -342,44 +344,66 @@ int main(int argc, char* argv[]) {
         ai_gateway->ChatStream(chat_req, *writer);
     });
 
-    // ----- File upload demo -----
-    server.routes().Post("/upload", [](const muduo_http::HttpRequest& req,
-                                        muduo_http::HttpResponse& response) {
-        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+    // ----- File upload (with auth, saves to user directory) -----
+    server.routes().Post("/api/upload", [user_manager](const muduo_http::HttpRequest& req,
+                                                        muduo_http::HttpResponse& response) {
+        response.SetHeader("Content-Type", "application/json");
 
+        // Resolve user
+        std::string phone;
+        auto hit = req.headers.find("Authorization");
+        if (hit != req.headers.end()) {
+            std::string t = hit->second;
+            if (t.size() > 7 && t.substr(0, 7) == "Bearer ")
+                user_manager->VerifyToken(t.substr(7), phone);
+        }
+        if (phone.empty()) phone = "anonymous";
+
+        // Parse multipart
         auto ct_it = req.headers.find("Content-Type");
         if (ct_it == req.headers.end()) {
-            response.SetBody("Missing Content-Type\n");
+            response.SetBody(nlohmann::json({{"error", "Missing Content-Type"}}).dump());
             return;
         }
-
         std::string boundary = muduo_http::ExtractBoundary(ct_it->second);
         if (boundary.empty()) {
-            response.SetBody("Invalid Content-Type (not multipart)\n");
+            response.SetBody(nlohmann::json({{"error", "Not multipart"}}).dump());
             return;
         }
-
         muduo_http::MultipartParser parser;
         if (!parser.Parse(req.body, boundary)) {
-            response.SetBody("Failed to parse multipart data\n");
+            response.SetBody(nlohmann::json({{"error", "Parse failed"}}).dump());
             return;
         }
 
-        std::string result;
-        result += "Parsed " + std::to_string(parser.fields().size()) + " parts:\n\n";
+        // Save files
+        std::string user_dir = "uploads/" + phone;
+        mkdir(user_dir.c_str(), 0755);
 
+        nlohmann::json files = nlohmann::json::array();
         for (const auto& field : parser.fields()) {
-            result += "  field: " + field.name;
             if (!field.filename.empty()) {
-                result += " (file: " + field.filename + ", " +
-                          std::to_string(field.data.size()) + " bytes)";
-            } else {
-                result += " = " + field.value;
+                // Handle relative path from folder upload
+                std::string rel_path = field.filename;
+                std::string file_path = user_dir + "/" + rel_path;
+                // Create subdirectories
+                auto slash = rel_path.rfind('/');
+                if (slash == std::string::npos) slash = rel_path.rfind('\\');
+                if (slash != std::string::npos) {
+                    std::string sub = user_dir + "/" + rel_path.substr(0, slash);
+                    mkdir(sub.c_str(), 0755);
+                    // Recursive mkdir
+                    for (size_t i = 0; i < sub.size(); i++)
+                        if (sub[i] == '/') { sub[i] = 0; mkdir(sub.c_str(), 0755); sub[i] = '/'; }
+                    mkdir(sub.c_str(), 0755);
+                }
+                std::ofstream out(file_path, std::ios::binary);
+                out.write(field.data.data(), field.data.size());
+                out.close();
+                files.push_back({{"name", field.filename}, {"path", file_path}, {"size", field.data.size()}});
             }
-            result += "\n";
         }
-
-        response.SetBody(result);
+        response.SetBody(nlohmann::json({{"files", files}, {"count", files.size()}}).dump());
     });
 
     // Catch-all: serve static files for non-API paths
@@ -1474,60 +1498,46 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    // Create chat agent — system prompt reads model name from config
+    // Create chat agent — dynamic system prompt from prompts/ directory
     std::string model_name = cfg.Get("ai.model", "deepseek-v4-flash");
     std::string workspace_path = cfg.Get("ai.workspace", ".");
-    std::string system_prompt =
-        "你是知墨（ZhiMo），一个自建的 AI 助手。"
-        "当前底层调用 " + model_name + " 模型的 API，但你不是该模型的官方产品，也不代表任何公司。\n"
-        "当前工作目录：" + workspace_path + "。默认在此目录下操作文件。\n\n"
 
-        "== 工具使用规则 ==\n"
-        "你有以下工具可用，在处理用户请求时必须优先使用工具而非仅用文本回答：\n\n"
+    // Load prompt layer file, return "" if missing
+    auto load_prompt = [](const std::string& path) -> std::string {
+        std::ifstream f("prompts/" + path);
+        if (!f.is_open()) return "";
+        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    };
 
-        "【读写文件】\n"
-        "- read_file(path): 读取文件内容。当用户想查看代码、配置、文档时使用。\n"
-        "- write_file(path, content): 写入/覆盖文件。当用户要求创建、编辑或保存文件时使用。\n"
-        "  不得仅用文本模拟写文件，必须调用此工具完成。\n"
-        "- edit_file(path, old_text, new_text): 精确替换文件中的局部内容。"
-        "适合修改大文件中的某几行，不需要重写整个文件。使用前先 read_file 了解文件内容。\n\n"
+    // Build dynamic system prompt based on user message keywords
+    auto build_prompt = [=](const std::string& user_msg, const std::string& model, const std::string& ws) -> std::string {
+        std::string p;
+        auto add = [&](const std::string& text) {
+            if (!text.empty()) { p += text; if (p.back() != '\n') p += '\n'; }
+        };
+        std::string l1 = load_prompt("L1_root.txt");
+        { auto pos = l1.find("{{model_name}}"); if (pos != std::string::npos) l1.replace(pos, 14, model); }
+        { auto pos = l1.find("{{workspace}}"); if (pos != std::string::npos) l1.replace(pos, 13, ws); }
+        add(l1);
+        add(load_prompt("L2_workflow.txt"));
+        bool has_write = user_msg.find("写")!=std::string::npos || user_msg.find("创建")!=std::string::npos || user_msg.find("生成")!=std::string::npos || user_msg.find("代码")!=std::string::npos || user_msg.find("编程")!=std::string::npos || user_msg.find("打包")!=std::string::npos || user_msg.find("导出")!=std::string::npos;
+        bool has_exec = user_msg.find("运行")!=std::string::npos || user_msg.find("编译")!=std::string::npos || user_msg.find("安装")!=std::string::npos || user_msg.find("执行")!=std::string::npos || user_msg.find("启动")!=std::string::npos || user_msg.find("测试")!=std::string::npos || user_msg.find("部署")!=std::string::npos || user_msg.find("构建")!=std::string::npos;
+        bool has_web = user_msg.find("搜索")!=std::string::npos || user_msg.find("查")!=std::string::npos || user_msg.find("新闻")!=std::string::npos || user_msg.find("天气")!=std::string::npos || user_msg.find("最新")!=std::string::npos || user_msg.find("网页")!=std::string::npos;
+        bool has_file = user_msg.find("文件")!=std::string::npos || user_msg.find("目录")!=std::string::npos || user_msg.find("读")!=std::string::npos || user_msg.find("编辑")!=std::string::npos || user_msg.find("修改")!=std::string::npos || user_msg.find("项目")!=std::string::npos || user_msg.find("文件夹")!=std::string::npos;
+        int l3_count = 0;
+        if (has_write && l3_count < 2) { add(load_prompt("L3_tools_read.txt")); l3_count++; }
+        if (has_exec && l3_count < 2) { add(load_prompt("L3_tools_exec.txt")); l3_count++; }
+        if (has_web && l3_count < 2) { add(load_prompt("L3_tools_web.txt")); l3_count++; }
+        if (has_file && l3_count < 2) { add(load_prompt("L3_tools_fileops.txt")); l3_count++; }
+        if (l3_count == 0) { add(load_prompt("L3_tools_read.txt")); }
+        add(load_prompt("L4_output.txt"));
+        add(load_prompt("L5_strategy.txt"));
+        if (p.empty()) { p = "你是知墨（ZhiMo），一个自建的 AI 助手。当前调用 " + model + " 模型。"; }
+        return p;
+    };
 
-        "【文件搜索】\n"
-        "- search_files(pattern, path, glob): 在文件中搜索文本。用于查找代码中的函数定义、引用、关键词等。\n"
-        "- list_directory(path): 列出目录内容。当用户想了解项目结构时使用。\n\n"
-
-        "【命令执行】\n"
-        "- execute_command(command, timeout_seconds): 执行 shell 命令。"
-        "可用于编译、运行脚本、安装包、git 操作、启动服务等。\n\n"
-
-        "【网络搜索】\n"
-        "- search_web(query, count): 在互联网上搜索信息。"
-        "当用户问到新闻、实时数据、你不知道的内容时使用。"
-        "返回搜索结果的标题、链接和摘要。\n"
-        "- web_fetch(url, max_chars): 抓取网页内容并提取纯文本。"
-        "用于查看具体网页、阅读文章内容、获取详细信息。\n\n"
-
-        "【文件查找】\n"
-        "- glob(pattern, path): 按文件名模式匹配查找文件。如 '**/*.cpp' 查找所有cpp文件。\n\n"
-
-        "【系统信息】\n"
-        "- system_info(): 查看操作系统、CPU、内存、磁盘等信息。\n\n"
-
-        "== 行为规范 ==\n"
-        "1. 当用户请求涉及文件操作（创建、编辑、查看、搜索），必须使用对应的文件工具，不能仅用文本模拟。\n"
-        "2. 写代码或脚本时，使用 write_file 保存到文件，让用户可以直接运行。\n"
-        "3. 需要确认项目结构时，先 list_directory 或 search_files 了解情况，再 read_file 查看具体文件。\n"
-        "4. 编译或运行代码时，使用 execute_command 执行，并把输出返回给用户。\n"
-        "5. 如果工具调用出错，向用户解释错误并尝试其他方法。\n"
-        "6. 你有长期记忆能力，每次对话都会自动保存，下次可以继续。\n"
-        "7. 回复时使用纯文本自然语言，不要用 markdown 符号。"
-        "不允许使用 **、*、#、- 等 markdown 标记符号。"
-        "如果用户问的是列表，用换行和数字/短横即可。"
-        "代码可以用 ``` 标注，但普通回答禁止任何 markdown 格式。\n"
-        "8. 当用户问你是谁时，回答你是知墨，一个自建的 AI 助手。\n"
-        "9. 上网搜索、查网页必须用 search_web 或 web_fetch 工具，禁止用 execute_command 手动调 curl。\n";
     auto chat_agent = std::make_shared<muduo_http::ChatAgent>(
-        ai_gateway, tool_executor, system_prompt
+        ai_gateway, tool_executor, build_prompt("", model_name, workspace_path)
     );
 
     if (!agent_tools.empty()) {
@@ -1601,7 +1611,7 @@ int main(int argc, char* argv[]) {
     auto* loop = server.get_loop();
 
     // POST /chat/memory - async chat with long-term memory + provider switching
-    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, user_manager, &providers, &worker_pool, loop]
+    server.routes().Post("/chat/memory", [memory_manager, ai_gateway, user_manager, &providers, &worker_pool, loop, build_prompt, model_name, workspace_path]
     (const muduo_http::HttpRequest& req, muduo_http::HttpResponse&) {
         // Parse request on IO thread
         nlohmann::json body;
@@ -1664,9 +1674,15 @@ int main(int argc, char* argv[]) {
         auto writer = req.stream;
         auto conn = req.stream_conn;
 
+        // Build dynamic prompt on IO thread (before worker)
+        std::string dynamic_prompt = build_prompt(message, model_name, workspace_path);
+
         // Post blocking work to thread pool
-        worker_pool.run([memory_manager, ai_gateway, user_manager, message, session, provider, &providers, loop, writer, auth_phone]() {
+        worker_pool.run([memory_manager, ai_gateway, user_manager, message, session, provider, &providers, loop, writer, auth_phone, dynamic_prompt]() {
             // ---- This runs on a worker thread ----
+            // Set dynamic prompt on the agent
+            memory_manager->agent()->set_system_prompt(dynamic_prompt);
+
             // Lock shared state — only one AI request at a time (prevents race)
             static std::mutex worker_lock;
             std::lock_guard<std::mutex> guard(worker_lock);

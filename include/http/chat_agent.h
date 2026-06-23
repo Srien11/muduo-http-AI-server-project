@@ -43,6 +43,11 @@ public:
     // Set available tools (JSON array of tool definitions for OpenAI API)
     void SetTools(const nlohmann::json& tools);
 
+    // Dynamic prompt support
+    void set_system_prompt(const std::string& prompt) { system_prompt_ = prompt; }
+    const std::string& system_prompt() const { return system_prompt_; }
+    const ToolExecutor& tool_executor() const { return tool_executor_; }
+
 private:
     std::shared_ptr<AiGateway> gateway_;
     ToolExecutor tool_executor_;

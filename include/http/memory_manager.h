@@ -25,6 +25,9 @@ public:
     void set_max_context_messages(int n) { max_context_messages_ = n; }
     int max_context_messages() const { return max_context_messages_; }
 
+    // Access agent for dynamic prompt support
+    std::shared_ptr<ChatAgent> agent() const { return agent_; }
+
 private:
     std::string HistoryPath(const std::string& session_id) const;
     void TrimContext();

@@ -38,7 +38,13 @@ Middleware CreateLoggingMiddleware() {
 
 Middleware CreateCorsMiddleware() {
     return [](const HttpRequest& request, HttpResponse& response) {
-        response.SetHeader("Access-Control-Allow-Origin", "*");
+        auto origin = request.headers.find("Origin");
+        if (origin != request.headers.end()) {
+            response.SetHeader("Access-Control-Allow-Origin", origin->second);
+        } else {
+            response.SetHeader("Access-Control-Allow-Origin", "*");
+        }
+        response.SetHeader("Access-Control-Allow-Credentials", "true");
         response.SetHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         response.SetHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 

@@ -117,14 +117,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
   <div class="chat-in">
     <div class="row">
+      <input type="file" id="fileInput" multiple style="display:none" onchange="handleFiles(this.files);this.value=''">
+      <button id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传文件/文件夹" style="width:42px;background:transparent;color:var(--text-muted);font-size:18px;">📎</button>
       <input id="chatInput" placeholder="输入消息..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
       <button id="sendBtn" onclick="sendMsg()" style="width:42px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polyline points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
     <div class="hint" id="keyHint">未配置</div>
+    <div id="uploadList" style="max-width:900px;margin:0 auto;padding:4px 0;display:none;"></div>
     <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;" id="statsBar"></div>
   </div>
+</div>
+
+<!-- Drag overlay -->
+<div id="dragOverlay" style="display:none;position:fixed;inset:0;background:rgba(99,102,241,0.12);z-index:200;align-items:center;justify-content:center;border:3px dashed var(--accent);margin:20px;border-radius:20px;pointer-events:none;">
+  <div style="text-align:center;color:var(--accent);font-size:24px;font-weight:700;">📂 释放文件以上传</div>
 </div>
 
 <div class="modal-overlay" id="settingsModal">
@@ -190,6 +198,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
 </div>
 
+<!-- Welcome banner -->
+<div id="welcomeBanner" style="display:none;background:#eef0ff;border-bottom:1px solid #c7d2fe;padding:6px 16px;font-size:12px;color:var(--accent);text-align:center;">
+  🎉 点左下角 ⚙ 配 API Key ｜ 拖文件到窗口上传 ｜ 输入问题开始对话
+  <button onclick="var el=document.getElementById('welcomeBanner');el.style.display='none';localStorage.setItem('zhimo_welcomed','1')" style="margin-left:12px;background:none;border:1px solid #c7d2fe;color:var(--accent);cursor:pointer;font-size:11px;padding:1px 8px;border-radius:4px;">知道了</button>
+</div>
+
+<!-- Drag overlay -->
+<div id="dragOverlay" style="display:none;position:fixed;inset:0;background:rgba(99,102,241,0.15);z-index:200;align-items:center;justify-content:center;border:3px dashed var(--accent);margin:20px;border-radius:20px;pointer-events:none;">
+  <div style="text-align:center;color:var(--accent);font-size:24px;font-weight:700;">📂 释放文件以上传</div>
+</div>
+
 <script>
 var authToken = localStorage.getItem('zhimo_token');
 var authPhone = '';
@@ -207,8 +226,11 @@ function authHeaders() {
 
 async function authFetch(url, opts) {
   if (!opts) opts = {};
-  if (!opts.headers) opts.headers = authHeaders();
-  else Object.assign(opts.headers, authHeaders());
+  // Don't override Content-Type for FormData (browser auto-sets multipart boundary)
+  var isFormData = (typeof FormData !== 'undefined' && opts.body instanceof FormData);
+  if (!opts.headers) opts.headers = {};
+  if (!isFormData) opts.headers['Content-Type'] = 'application/json';
+  if (authToken) opts.headers['Authorization'] = 'Bearer '+authToken;
   var res = await fetch(url, opts);
   if (res.status === 401) { authToken = null; localStorage.removeItem('zhimo_token'); location.reload(); throw new Error('auth'); }
   return res;
@@ -399,12 +421,92 @@ function newChat() {
 
 function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+// ---- File upload ----
+var uploadedFiles = [];  // [{name, path, size}]
+
+async function uploadFile(file, relativePath) {
+  var form = new FormData();
+  form.append('file', file, relativePath || file.name);
+  // Upload via direct IP to bypass Cloudflare 100s timeout
+  var uploadUrl = 'http://120.48.20.45:8080/api/upload';
+  try {
+    var headers = {};
+    if (authToken) headers['Authorization'] = 'Bearer '+authToken;
+    var res = await fetch(uploadUrl, {method:'POST',body:form,headers:headers});
+    var d = await res.json();
+    if (d.files) {
+      d.files.forEach(function(f){ uploadedFiles.push(f); });
+      showUploadList();
+    }
+  } catch(e) { console.error('upload error', e); }
+}
+
+function showUploadList() {
+  var el = document.getElementById('uploadList');
+  if (!uploadedFiles.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = uploadedFiles.map(function(f,i){
+    return '<span style="display:inline-block;background:#eef0ff;color:var(--accent);padding:2px 8px;border-radius:4px;margin:2px;font-size:11px;cursor:pointer;" onclick="uploadedFiles.splice('+i+',1);showUploadList();" title="点击移除">📄 '+esc(f.name)+' ('+(f.size>1024?(f.size/1024).toFixed(1)+'KB':f.size+'B')+') ✕</span>';
+  }).join('');
+}
+
+async function handleFiles(fileList) {
+  for (var i = 0; i < fileList.length; i++) {
+    var f = fileList[i];
+    var rel = f.webkitRelativePath || f.name;
+    uploadFile(f, rel);
+  }
+}
+
+// Drag & drop
+document.addEventListener('dragover', function(e){ e.preventDefault(); e.stopPropagation(); document.getElementById('dragOverlay').style.display='flex'; });
+document.addEventListener('dragleave', function(e){ e.preventDefault(); e.stopPropagation(); if(e.target===document.documentElement||e.target===document.body) document.getElementById('dragOverlay').style.display='none'; });
+document.addEventListener('drop', function(e){
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById('dragOverlay').style.display = 'none';
+  var items = e.dataTransfer.items;
+  if (!items) { handleFiles(e.dataTransfer.files); return; }
+  var entries = [];
+  for (var i = 0; i < items.length; i++) {
+    var entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+    if (entry) { entries.push(entry); }
+    else { var f = items[i].getAsFile ? items[i].getAsFile() : null; if (f) handleFiles([f]); }
+  }
+  if (entries.length) traverseEntries(entries);
+});
+
+function traverseEntries(entries, path) {
+  path = path || '';
+  entries.forEach(function(entry){
+    if (entry.isFile) {
+      entry.file(function(file){
+        var rel = (path + file.name).replace(/^\//,'');
+        uploadFile(file, rel);
+      });
+    } else if (entry.isDirectory) {
+      var dirReader = entry.createReader();
+      dirReader.readEntries(function(children){
+        traverseEntries(children, path + entry.name + '/');
+      });
+    }
+  });
+}
+
 // Normal chat (with memory + tools)
 async function sendMsg() {
   var input = document.getElementById('chatInput');
   var msg = input.value.trim();
-  if (!msg || isLoading) return;
+  // If there are uploaded files but no message, auto-generate context
+  var fileContext = '';
+  if (uploadedFiles.length) {
+    fileContext = '\n[已上传文件:\n' + uploadedFiles.map(function(f){ return '  ' + f.path + ' (' + f.size + ' bytes)'; }).join('\n') + '\n]';
+  }
+  if (!msg && !uploadedFiles.length) return;
+  if (!msg) msg = '请帮我看看我上传的文件';
+  var fullMsg = msg + fileContext;
   input.value = '';
+  uploadedFiles = [];
+  showUploadList();
   var log = document.getElementById('chatLog');
   if (log.children.length===1 && log.children[0].querySelector('[style*="text-align:center"]')) log.innerHTML = '';
   log.insertAdjacentHTML('beforeend','<div class="msg user"><div class="msg-av">U</div><div class="msg-bub">'+esc(msg)+'</div></div>');
@@ -416,7 +518,7 @@ async function sendMsg() {
   botDiv.innerHTML = '<div class="msg-av">M</div><div class="msg-bub">思考中...</div>';
   log.appendChild(botDiv); log.scrollTop = log.scrollHeight;
   try {
-    var d = await (await authFetch('/chat/memory',{method:'POST',body:JSON.stringify({message:msg,session_id:curSession,provider:curProvider})})).json();
+    var d = await (await authFetch('/chat/memory',{method:'POST',body:JSON.stringify({message:fullMsg,session_id:curSession,provider:curProvider})})).json();
     if (!botDiv.parentNode) return;
     if (d.response) {
       var html = '<div class="msg-av">M</div><div class="msg-bub">'+esc(d.response);
@@ -463,6 +565,10 @@ if (authToken) {
   initApp();
   setInterval(loadSessions, 5000);
   setInterval(loadStats, 10000);
+  // Show welcome banner on first login
+  if (!localStorage.getItem('zhimo_welcomed')) {
+    document.getElementById('welcomeBanner').style.display = 'block';
+  }
 }
 </script>
 </body>
