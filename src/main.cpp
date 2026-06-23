@@ -90,10 +90,11 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    // Static routes
-    server.routes().Get("/", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
-        response.SetHeader("Content-Type", "text/plain; charset=utf-8");
-        response.SetBody("Hello from muduo_http router.\n");
+    // Root route: serve index.html
+    auto file_handler = std::make_shared<muduo_http::StaticFileHandler>("www");
+    server.routes().Get("/", [file_handler](const muduo_http::HttpRequest&,
+                                             muduo_http::HttpResponse& response) {
+        file_handler->Serve("/index.html", response);
     });
 
     server.routes().Get("/health", [](const muduo_http::HttpRequest&, muduo_http::HttpResponse& response) {
@@ -366,9 +367,6 @@ int main(int argc, char* argv[]) {
 
         response.SetBody(result);
     });
-
-    // ----- Static file service -----
-    auto file_handler = std::make_shared<muduo_http::StaticFileHandler>("www");
 
     // Catch-all: serve static files for non-API paths
     // Must be registered after all API routes
