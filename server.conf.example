@@ -22,3 +22,12 @@ timeout = 3600
 [log]
 level = info
 file = server.log
+
+[sms]
+# 阿里云短信/号码认证配置
+access_key_id = your-access-key-id
+access_key_secret = your-access-key-secret
+sign_name = your-sms-sign-name
+template_code = SMS_xxxxxx
+scheme_code = FC_xxxxxx
+template_code = SMS_xxxxxx

@@ -34,6 +34,7 @@ add_executable(muduo_http_server
     src/http/ssl_context.cpp
     src/http/static_file_handler.cpp
     src/http/stream_writer.cpp
+    src/http/user_manager.cpp
     src/http/http_server.cpp
     src/http/http_response.cpp
 )
